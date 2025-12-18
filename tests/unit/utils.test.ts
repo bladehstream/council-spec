@@ -1,81 +1,5 @@
 import { describe, it, expect } from 'vitest';
-
-// Since the utility functions in council.ts are not exported,
-// we replicate and test the core logic here to ensure correctness.
-// These should be kept in sync with src/council.ts
-
-/**
- * Safely format a field that should be an array but might be string, object, or array
- */
-function formatList(value: unknown, fallback = 'Not specified'): string {
-  if (!value) return fallback;
-  if (Array.isArray(value)) return value.join(', ') || fallback;
-  if (typeof value === 'string') return value || fallback;
-  if (typeof value === 'object') {
-    return Object.entries(value)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(', ') || fallback;
-  }
-  return String(value);
-}
-
-/**
- * Extract ambiguities from synthesis text
- */
-function extractAmbiguities(synthesis: string): Array<{
-  id: string;
-  description: string;
-  source: string;
-}> {
-  const ambiguities: Array<{ id: string; description: string; source: string }> = [];
-
-  const patterns = [
-    /ambiguit(?:y|ies)[:\s]+([^\n]+)/gi,
-    /clarification needed[:\s]+([^\n]+)/gi,
-    /unclear[:\s]+([^\n]+)/gi,
-    /question[:\s]+([^\n]+)/gi,
-    /missing information[:\s]+([^\n]+)/gi
-  ];
-
-  let id = 1;
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(synthesis)) !== null) {
-      ambiguities.push({
-        id: `AMB-${id++}`,
-        description: match[1].trim(),
-        source: 'divergent_responses',
-      });
-    }
-  }
-
-  return ambiguities;
-}
-
-/**
- * Extract spec sections from synthesis text
- */
-function extractSpecSections(synthesis: string): Record<string, string> {
-  const sections: Record<string, string> = {};
-
-  const sectionPatterns: Record<string, RegExp> = {
-    architecture: /(?:architecture|system design)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
-    data_model: /(?:data model|entities|database)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
-    api_contracts: /(?:api|endpoints|interfaces)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
-    user_flows: /(?:user flows|user journey|critical paths)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
-    security: /(?:security|authentication|authorization)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
-    deployment: /(?:deployment|infrastructure|scaling)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i
-  };
-
-  for (const [key, pattern] of Object.entries(sectionPatterns)) {
-    const match = synthesis.match(pattern);
-    if (match) {
-      sections[key] = match[1].trim();
-    }
-  }
-
-  return sections;
-}
+import { formatList, extractAmbiguities, extractSpecSections } from '../../src/utils.js';
 
 describe('formatList', () => {
   it('should return fallback for null/undefined', () => {
@@ -149,6 +73,19 @@ Question: Second question here
     expect(result.length).toBe(1);
     expect(result[0].description).toBe('The scope of the project needs definition.');
   });
+
+  it('should handle ambiguities plural form', () => {
+    const synthesis = 'Ambiguities: Multiple areas need clarification including auth and storage.';
+    const result = extractAmbiguities(synthesis);
+    expect(result.length).toBe(1);
+    expect(result[0].description).toContain('Multiple areas');
+  });
+
+  it('should trim whitespace from descriptions', () => {
+    const synthesis = 'Question:   Lots of spaces here   ';
+    const result = extractAmbiguities(synthesis);
+    expect(result[0].description).toBe('Lots of spaces here');
+  });
 });
 
 describe('extractSpecSections', () => {
@@ -213,5 +150,55 @@ Checkout flow.
     expect(result.security).toContain('OAuth 2.0');
     expect(result.deployment).toContain('AWS');
     expect(result.user_flows).toContain('Checkout');
+  });
+
+  it('should handle Database as data model header', () => {
+    const synthesis = `
+## Database:
+PostgreSQL with normalized schema.
+    `;
+
+    const result = extractSpecSections(synthesis);
+    expect(result.data_model).toContain('PostgreSQL');
+  });
+
+  it('should handle Critical Paths as user flows header', () => {
+    const synthesis = `
+## Critical Paths:
+Login -> Dashboard -> Action.
+    `;
+
+    const result = extractSpecSections(synthesis);
+    expect(result.user_flows).toContain('Login');
+  });
+
+  it('should handle Authorization as security header', () => {
+    const synthesis = `
+## Authorization:
+Role-based access control.
+    `;
+
+    const result = extractSpecSections(synthesis);
+    expect(result.security).toContain('Role-based');
+  });
+
+  it('should handle Scaling as deployment header', () => {
+    const synthesis = `
+## Scaling:
+Horizontal scaling with load balancer.
+    `;
+
+    const result = extractSpecSections(synthesis);
+    expect(result.deployment).toContain('Horizontal scaling');
+  });
+
+  it('should handle Interfaces as api_contracts header', () => {
+    const synthesis = `
+## Interfaces:
+GraphQL API with subscriptions.
+    `;
+
+    const result = extractSpecSections(synthesis);
+    expect(result.api_contracts).toContain('GraphQL');
   });
 });
