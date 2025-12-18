@@ -7,13 +7,22 @@
   "scripts": {
     "build": "tsc",
     "council": "node dist/council.js",
-    "init": "node dist/init.js"
+    "init": "node dist/init.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:contract": "vitest run tests/contract",
+    "test:smoke": "vitest run tests/smoke",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "agent-council": "file:../agent-council/repo"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "@vitest/coverage-v8": "^4.0.16",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.16"
   }
 }

@@ -5,6 +5,9 @@ agent-council-testing/
 # Build output
 dist/
 
+# Test coverage
+coverage/
+
 # State files (project-specific, not committed)
 state/*.json
 state/*.log
