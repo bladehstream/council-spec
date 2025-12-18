@@ -47,15 +47,19 @@ Then start the workflow by interviewing the user.
 Follow `prompts/workflow.md`. Gather requirements conversationally, then write `state/interview-output.json`.
 
 ### 2. Council
-Run:
+Run with a preset (see Runtime Configuration below for options):
 ```bash
-npm run council
+COUNCIL_PRESET=fast npm run council      # Quick iteration
+COUNCIL_PRESET=balanced npm run council  # Default quality
+COUNCIL_PRESET=thorough npm run council  # Maximum quality
 ```
 
-This invokes agent-council with the configuration in `config.json`:
-- **Responders**: Stage 1 agents (e.g., "3:heavy" = 3 agents at heavy tier)
-- **Evaluators**: Stage 2 peer review agents
-- **Chairman**: Final synthesis agent
+**Always use `COUNCIL_PRESET`** - this ensures two-pass chairman synthesis is configured correctly.
+
+This invokes agent-council with:
+- **Responders**: Stage 1 agents analyzing requirements
+- **Evaluators**: Stage 2 peer review agents ranking responses
+- **Chairman**: Two-pass synthesis (Pass 1: summary/ambiguities, Pass 2: detailed specs)
 
 Output goes to `state/council-output.json`.
 
@@ -153,23 +157,38 @@ If yes, explain the available options and write preferences to `state/council-pr
 }
 ```
 
-**Presets:**
-- `fast` - 3:fast responders, 3:fast evaluators, default chairman (quick iteration)
-- `balanced` - 3:default responders, 3:default evaluators, heavy chairman (default)
-- `thorough` - 3:heavy responders, 6:heavy evaluators, heavy chairman (maximum quality)
+**Presets (from agent-council):**
+- `fast` - 3:fast responders, 3:fast evaluators, default/default chairman (quick iteration)
+- `balanced` - 3:default responders, 3:default evaluators, heavy/default chairman (default)
+- `thorough` - 3:heavy responders, 6:heavy evaluators, heavy/heavy chairman (maximum quality)
 
-**Environment Variables (highest priority):**
+All presets use two-pass chairman synthesis for reliable large output generation.
+
+**Environment Variables:**
+
+**IMPORTANT: Always use `COUNCIL_PRESET` to run the council.** This ensures two-pass chairman synthesis is properly configured. Individual env vars (COUNCIL_RESPONDERS, etc.) do NOT inherit two-pass config and will result in missing spec sections.
+
 ```bash
-COUNCIL_RESPONDERS=3:default npm run council
-COUNCIL_EVALUATORS=3:default npm run council
-COUNCIL_CHAIRMAN=claude:heavy npm run council
-COUNCIL_TIMEOUT=420 npm run council
+# RECOMMENDED: Use a preset (inherits ALL settings including two-pass)
+COUNCIL_PRESET=fast npm run council      # Quick iteration
+COUNCIL_PRESET=balanced npm run council  # Default quality
+COUNCIL_PRESET=thorough npm run council  # Maximum quality
+
+# Override specific parts while keeping preset base
+COUNCIL_PRESET=fast COUNCIL_CHAIRMAN=claude:heavy npm run council
+```
+
+**DO NOT use individual env vars without COUNCIL_PRESET:**
+```bash
+# BAD - loses two-pass config, Pass 2 sections will be missing!
+COUNCIL_RESPONDERS=3:fast COUNCIL_EVALUATORS=3:fast npm run council
 ```
 
 **Priority order:**
-1. Environment variables (highest)
-2. `state/council-preferences.json`
-3. `config.json` (lowest)
+1. `COUNCIL_PRESET` env var - **USE THIS** (inherits all settings from agent-council)
+2. Individual env vars - only for overriding specific parts of a preset
+3. `state/council-preferences.json`
+4. `config.json` (lowest)
 
 ## Resuming After Context Reset
 

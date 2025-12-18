@@ -8,56 +8,26 @@ import {
   createAgentFromSpec,
   listProviders,
   loadModelsConfig,
+  parseAgentSpec,
+  parseSectionedOutput,
+  getPreset,
+  buildPipelineConfig,
+  PASS1_SECTIONS,
+  PASS2_SECTIONS,
   type PipelineResult,
   type EnhancedPipelineConfig,
+  type CheckpointOptions,
+  type AgentConfig,
+  type TwoPassConfig,
+  type ParsedSection,
 } from 'agent-council';
 import type { InterviewOutput, CouncilOutput, Config, Ambiguity } from './types.js';
 import { formatList } from './utils.js';
 
-/**
- * Structured output format for the chairman.
- * This instructs the chairman to output JSON that can be reliably parsed.
- */
-const CHAIRMAN_OUTPUT_FORMAT = `You MUST output your response as a JSON object with this exact structure:
-
-{
-  "executive_summary": "2-3 paragraph synthesis of the council's analysis and key recommendations",
-  "ambiguities": [
-    {
-      "id": "AMB-1",
-      "question": "Clear question that needs human decision",
-      "priority": "critical" | "important" | "minor",
-      "context": "Why this matters and what it affects",
-      "options": ["Option A description", "Option B description"],
-      "recommendation": "Council's recommended choice with rationale"
-    }
-  ],
-  "spec_sections": {
-    "architecture": "Detailed architecture recommendations as markdown",
-    "data_model": "Data model design including entities, relationships, storage as markdown",
-    "api_contracts": "API specifications, endpoints, request/response formats as markdown",
-    "user_flows": "Critical user journeys and system interactions as markdown",
-    "security": "Security considerations, auth, encryption, compliance as markdown",
-    "deployment": "Infrastructure, scaling, monitoring recommendations as markdown"
-  },
-  "implementation_phases": [
-    {
-      "phase": 1,
-      "name": "Phase name",
-      "description": "What this phase accomplishes",
-      "key_deliverables": ["Deliverable 1", "Deliverable 2"]
-    }
-  ],
-  "consensus_notes": "Summary of areas where agents agreed/disagreed and how conflicts were resolved"
-}
-
-CRITICAL REQUIREMENTS:
-- Output ONLY the JSON object, no markdown code fences, no additional text
-- Every open question or ambiguity identified MUST appear in the ambiguities array
-- All spec_sections fields are REQUIRED - do not omit any
-- Priority must be exactly one of: "critical", "important", or "minor"
-- Include at least 2-4 implementation phases
-- The JSON must be valid and parseable`;
+// Note: The two-pass chairman uses default prompts from agent-council.
+// Pass 1 produces: executive_summary, ambiguities, consensus_notes, implementation_phases, section_outlines
+// Pass 2 produces: architecture, data_model, api_contracts, user_flows, security, deployment
+// Both passes use sectioned format (===SECTION:name=== ... ===END:name===) for robust parsing.
 
 /**
  * Interface for the structured chairman output
@@ -137,6 +107,92 @@ function truncate(str: string, maxLen: number): string {
   return str.substring(0, maxLen) + `... [truncated, ${str.length} total chars]`;
 }
 
+/**
+ * Attempt to repair truncated JSON by adding missing closing braces/brackets.
+ * This handles the common case where LLMs run out of tokens and don't complete
+ * the final closing characters.
+ *
+ * @returns The repaired JSON string, or null if repair wasn't possible
+ */
+function repairTruncatedJson(jsonStr: string): string | null {
+  // Count open and close braces/brackets
+  let openBraces = 0;
+  let closeBraces = 0;
+  let openBrackets = 0;
+  let closeBrackets = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (const char of jsonStr) {
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (char === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    switch (char) {
+      case '{': openBraces++; break;
+      case '}': closeBraces++; break;
+      case '[': openBrackets++; break;
+      case ']': closeBrackets++; break;
+    }
+  }
+
+  const missingBraces = openBraces - closeBraces;
+  const missingBrackets = openBrackets - closeBrackets;
+
+  // Only attempt repair if we're missing closers (truncation), not openers (corruption)
+  if (missingBraces < 0 || missingBrackets < 0) {
+    return null; // More closers than openers - corrupted, not truncated
+  }
+
+  if (missingBraces === 0 && missingBrackets === 0) {
+    return null; // Already balanced, issue is elsewhere
+  }
+
+  // Build the repair suffix
+  // We need to close brackets before braces if we're in an array context
+  // For simplicity, we'll try both orders and see which parses
+  const suffix1 = ']'.repeat(missingBrackets) + '}'.repeat(missingBraces);
+  const suffix2 = '}'.repeat(missingBraces) + ']'.repeat(missingBrackets);
+
+  // Try the most likely order first (arrays usually close before objects at end)
+  for (const suffix of [suffix1, suffix2]) {
+    const repaired = jsonStr + suffix;
+    try {
+      JSON.parse(repaired);
+      return repaired;
+    } catch {
+      // Try the other order
+    }
+  }
+
+  // If simple suffix didn't work, try a more aggressive approach:
+  // Check if we're mid-string and close it first
+  if (inString) {
+    const closedString = jsonStr + '"';
+    for (const suffix of [suffix1, suffix2]) {
+      const repaired = closedString + suffix;
+      try {
+        JSON.parse(repaired);
+        return repaired;
+      } catch {
+        // Continue trying
+      }
+    }
+  }
+
+  return null;
+}
+
 function debugLog(message: string): void {
   if (!DEBUG_LOGGING_ENABLED) return;
   log(message);
@@ -152,6 +208,8 @@ interface CouncilPreferences {
   evaluators?: string;
   chairman?: string;
   timeout_seconds?: number;
+  /** Preset name from agent-council (e.g., 'fast', 'balanced', 'thorough') */
+  preset?: string;
 }
 
 function loadPreferences(): CouncilPreferences | null {
@@ -164,8 +222,39 @@ function loadPreferences(): CouncilPreferences | null {
   }
 }
 
-function getEffectiveCouncilConfig(config: Config): Config['council'] {
+function getEffectiveCouncilConfig(config: Config): Config['council'] & { preset?: string } {
   const preferences = loadPreferences();
+  const modelsConfig = loadModelsConfig();
+
+  // Check for preset (highest priority for bulk settings)
+  const presetName = process.env.COUNCIL_PRESET || preferences?.preset;
+
+  if (presetName) {
+    // Load preset from agent-council's models.json
+    const preset = getPreset(presetName, modelsConfig);
+    if (!preset) {
+      console.warn(`Warning: Preset '${presetName}' not found, falling back to config.json`);
+    } else {
+      // Convert preset tiers to stage specs
+      // Individual env vars can still override specific parts of the preset
+      const chairmanProvider = modelsConfig.defaults?.chairman || 'claude';
+      const stage3Tier = preset.stage3?.tier || 'default';
+      const defaultChairman = `${chairmanProvider}:${stage3Tier}`;
+
+      return {
+        responders: process.env.COUNCIL_RESPONDERS || `${preset.stage1.count}:${preset.stage1.tier}`,
+        evaluators: process.env.COUNCIL_EVALUATORS || `${preset.stage2.count}:${preset.stage2.tier}`,
+        chairman: process.env.COUNCIL_CHAIRMAN || defaultChairman,
+        timeout_seconds: process.env.COUNCIL_TIMEOUT
+          ? parseInt(process.env.COUNCIL_TIMEOUT, 10)
+          : preferences?.timeout_seconds
+          ?? config.council.timeout_seconds,
+        preset: presetName,
+        // Pass through two-pass config from preset
+        _twoPass: preset.stage3?.twoPass,
+      } as Config['council'] & { preset?: string; _twoPass?: TwoPassConfig };
+    }
+  }
 
   // Priority: env vars > preferences > config.json
   return {
@@ -196,8 +285,94 @@ function loadInterview(): InterviewOutput {
   return JSON.parse(readFileSync(path, 'utf-8'));
 }
 
+/**
+ * Stage 1 output format schema for structured JSON responses.
+ */
+const STAGE1_OUTPUT_FORMAT = `You MUST output your response as a JSON object with this exact structure:
+
+{
+  "executive_summary": "A 300-500 word summary capturing: key architectural decisions and their rationale, critical technical risks or challenges identified, the most important ambiguities requiring human decision, and your overall confidence level in the recommendations. This summary will be used by the synthesis stage.",
+  "architecture": {
+    "overview": "High-level system design description",
+    "components": [
+      {
+        "name": "Component name",
+        "purpose": "What this component does",
+        "technology": "Recommended technology/framework",
+        "interfaces": ["List of interfaces it exposes or consumes"]
+      }
+    ],
+    "communication_patterns": "How components interact (REST, events, etc.)",
+    "diagrams": "ASCII or textual representation of architecture"
+  },
+  "data_model": {
+    "entities": [
+      {
+        "name": "Entity name",
+        "description": "Purpose of this entity",
+        "key_attributes": ["attribute1", "attribute2"],
+        "relationships": ["Relationship descriptions"]
+      }
+    ],
+    "storage_recommendations": "Database choices and rationale",
+    "data_flow": "How data moves through the system"
+  },
+  "api_contracts": {
+    "style": "REST/GraphQL/gRPC/etc.",
+    "endpoints": [
+      {
+        "method": "HTTP method or operation type",
+        "path": "Endpoint path",
+        "purpose": "What this endpoint does",
+        "request_shape": "Request body structure",
+        "response_shape": "Response body structure"
+      }
+    ],
+    "authentication": "Auth mechanism for APIs"
+  },
+  "user_flows": [
+    {
+      "name": "Flow name",
+      "actor": "Who performs this flow",
+      "steps": ["Step 1", "Step 2"],
+      "happy_path": "Expected outcome",
+      "error_cases": ["Possible failure modes"]
+    }
+  ],
+  "security": {
+    "authentication": "Auth strategy and implementation",
+    "authorization": "Permission model",
+    "data_protection": "Encryption, PII handling",
+    "compliance_notes": "GDPR, HIPAA, etc. considerations",
+    "threat_model": "Key threats and mitigations"
+  },
+  "deployment": {
+    "infrastructure": "Cloud provider, services",
+    "scaling_strategy": "How to handle load",
+    "monitoring": "Observability approach",
+    "ci_cd": "Deployment pipeline recommendations"
+  },
+  "ambiguities": [
+    {
+      "question": "What needs to be clarified",
+      "impact": "What this affects if not resolved",
+      "suggested_options": ["Option A", "Option B"],
+      "recommendation": "Your suggested resolution"
+    }
+  ],
+  "confidence_level": "high|medium|low",
+  "key_risks": ["Risk 1 with brief description", "Risk 2"]
+}
+
+CRITICAL REQUIREMENTS:
+- Output ONLY the JSON object, no markdown code fences, no additional text before or after
+- The executive_summary field is REQUIRED and must comprehensively capture your key findings
+- All top-level fields are REQUIRED
+- Be thorough but concise - this output feeds into subsequent analysis stages
+- The JSON must be valid and parseable`;
+
 function buildPrompt(interview: InterviewOutput): string {
-  return `You are analyzing requirements for a software project to produce a detailed specification.
+  return `You are analyzing requirements for a software project to produce a detailed technical specification.
 
 ## Interview Output
 
@@ -234,24 +409,29 @@ ${interview.open_questions?.map(q => `- ${q}`).join('\n') || 'None'}
 
 ## Your Task
 
-Analyze these requirements and produce:
+Analyze these requirements comprehensively and produce a structured technical specification covering:
 
-1. **Architecture Recommendations**: High-level system design, components, and their interactions
-2. **Data Model**: Key entities, relationships, and storage considerations
-3. **API Contracts**: Main endpoints/interfaces the system needs
+1. **Architecture**: System design, components, and their interactions
+2. **Data Model**: Entities, relationships, and storage considerations
+3. **API Contracts**: Endpoints/interfaces the system needs
 4. **User Flows**: Critical paths through the system
-5. **Security Considerations**: Authentication, authorization, data protection
-6. **Deployment Strategy**: Infrastructure, scaling, monitoring
+5. **Security**: Authentication, authorization, data protection
+6. **Deployment**: Infrastructure, scaling, monitoring
 
-Also identify any **ambiguities, contradictions, or missing information** that would need human clarification before implementation.
-
-Be specific and technical. This output will be used to generate a detailed specification.
+Identify any **ambiguities, contradictions, or missing information** that need human clarification.
 
 **Guidelines:**
-- Where possible, explain the reasoning behind your recommendations
-- If you reference industry standards, protocols, or best practices, cite them (but do not invent references)
+- Explain the reasoning behind your recommendations
+- Reference industry standards, protocols, or best practices where applicable (do not invent references)
 - Indicate confidence level when making assumptions about unspecified requirements
-- Prioritize practical, implementable solutions over theoretical ideals`;
+- Prioritize practical, implementable solutions over theoretical ideals
+- Be thorough - your analysis will be peer-reviewed and synthesized with other expert analyses
+
+---
+
+## OUTPUT FORMAT
+
+${STAGE1_OUTPUT_FORMAT}`;
 }
 
 function hashInterview(interview: InterviewOutput): string {
@@ -259,6 +439,29 @@ function hashInterview(interview: InterviewOutput): string {
     .update(JSON.stringify(interview))
     .digest('hex')
     .substring(0, 12);
+}
+
+/**
+ * Determine the fallback chairman based on the primary chairman's provider.
+ * Fallback chain: claude→gemini, gemini→codex, codex→gemini
+ */
+function getFallbackChairman(chairmanSpec: string): AgentConfig | undefined {
+  const { provider, tier } = parseAgentSpec(chairmanSpec);
+
+  const fallbackMap: Record<string, string> = {
+    claude: 'gemini',
+    gemini: 'codex',
+    codex: 'gemini',
+  };
+
+  const fallbackProvider = fallbackMap[provider];
+  if (!fallbackProvider) {
+    // Unknown provider, no fallback
+    return undefined;
+  }
+
+  // Use the same tier for the fallback
+  return createAgentFromSpec(`${fallbackProvider}:${tier}`);
 }
 
 async function runCouncil(prompt: string, config: Config): Promise<void> {
@@ -292,23 +495,59 @@ Starting council...
     const stage2Spec = parseStageSpec(config.council.evaluators, availableProviders, modelsConfig);
     const chairman = createAgentFromSpec(config.council.chairman);
 
-    // Build pipeline config with structured output format
+    // Build fallback chairman
+    const fallbackChairman = getFallbackChairman(config.council.chairman);
+    if (fallbackChairman) {
+      console.log(`  Fallback Chairman: ${fallbackChairman.name}`);
+    }
+
+    // Build two-pass configuration - use preset config if available, otherwise calculate from chairman tier
+    const presetTwoPass = (config.council as any)._twoPass as TwoPassConfig | undefined;
+    let twoPassConfig: TwoPassConfig;
+
+    if (presetTwoPass?.enabled) {
+      // Use two-pass config from preset
+      twoPassConfig = presetTwoPass;
+      console.log(`  Two-Pass Mode: Pass 1 (${presetTwoPass.pass1Tier || 'default'}) → Pass 2 (${presetTwoPass.pass2Tier || 'default'}) [from preset]`);
+    } else {
+      // Calculate from chairman tier with 'default' floor for Pass 2
+      const { tier: chairmanTier } = parseAgentSpec(config.council.chairman);
+      const pass2Tier = chairmanTier === 'heavy' ? 'default' : 'default'; // Floor at 'default'
+
+      twoPassConfig = {
+        enabled: true,
+        pass1Tier: chairmanTier,
+        pass2Tier: pass2Tier === chairmanTier ? undefined : pass2Tier as 'fast' | 'default' | 'heavy',
+      };
+      console.log(`  Two-Pass Mode: Pass 1 (${chairmanTier}) → Pass 2 (${pass2Tier})`);
+    }
+
+    // Build pipeline config with two-pass chairman, fallback, and summaries
     const pipelineConfig: EnhancedPipelineConfig = {
       stage1: { agents: stage1Spec.agents },
       stage2: { agents: stage2Spec.agents },
       stage3: {
         chairman,
         useReasoning: false,
-        outputFormat: CHAIRMAN_OUTPUT_FORMAT,
+        fallback: fallbackChairman,
+        useSummaries: true,  // Use executive summaries to reduce chairman context
+        twoPass: twoPassConfig,  // Enable two-pass synthesis
       },
     };
 
-    // Run the council pipeline
+    // Checkpoint configuration
+    const checkpointOptions: CheckpointOptions = {
+      checkpointDir: join(ROOT, 'state', 'checkpoints'),
+      checkpointName: 'council-checkpoint',
+    };
+
+    // Run the council pipeline with checkpointing and fallback
     const result = await runEnhancedPipeline(prompt, {
       config: pipelineConfig,
       timeoutMs: config.council.timeout_seconds * 1000,
       tty: process.stdout.isTTY ?? false,
       silent: false,
+      checkpoint: checkpointOptions,
       callbacks: {
         onStage1Complete: (results) => {
           console.log(`\nStage 1 complete: ${results.length} responses`);
@@ -359,68 +598,96 @@ Starting council...
       throw new Error('Council pipeline returned no results');
     }
 
-    // Parse the structured JSON output from chairman
-    let structuredOutput: ChairmanStructuredOutput;
+    // Parse the sectioned output from two-pass chairman
     const rawResponse = result.stage3.response;
 
-    try {
-      // Try to parse the JSON response directly
-      structuredOutput = JSON.parse(rawResponse);
-      console.log('\nSuccessfully parsed structured chairman output');
-    } catch (parseError) {
-      // #region DEBUG_LOGGING - chairman parse error diagnostics
-      console.error('\n--- CHAIRMAN PARSE ERROR ---');
-      console.error(`Raw response (first 500 chars): ${truncate(rawResponse, 500)}`);
-      debugLog(`Chairman parse error. Raw response preview: ${truncate(rawResponse, 1000)}`);
+    // Check if response looks like an error message first
+    if (rawResponse.startsWith('Error') || rawResponse.includes('Error from')) {
+      console.error('\n*** CHAIRMAN RETURNED AN ERROR MESSAGE ***');
+      console.error('This usually indicates an API error (rate limit, context too long, or service issue)');
+      debugLog(`Chairman returned error message: ${rawResponse}`);
+      throw new Error(`Chairman returned error: ${rawResponse}`);
+    }
 
-      if (DEBUG_LOGGING_ENABLED) {
-        // Save full debug dump
-        const dumpPath = saveDebugDump('chairman-raw-response.txt', rawResponse);
-        console.error(`Full response saved to: ${dumpPath}`);
-        debugLog(`Full chairman response saved to: ${dumpPath}`);
+    // Parse sectioned output from two-pass chairman
+    const sections = parseSectionedOutput(rawResponse);
+    const sectionMap = new Map(sections.map(s => [s.name, s]));
 
-        // Also save the full pipeline result for context
-        const pipelineDumpPath = saveDebugDump('pipeline-result.json', {
-          stage1: result.stage1.map(s => ({
-            agent: s.agent,
-            responseLength: s.response?.length || 0,
-            responsePreview: truncate(s.response || '', 500),
-          })),
-          stage2: result.stage2.map(s => ({
-            agent: s.agent,
-            parsedRanking: s.parsedRanking,
-            rankingRawLength: s.rankingRaw?.length || 0,
-          })),
-          aggregate: result.aggregate,
-          stage3: {
-            agent: result.stage3.agent,
-            responseLength: rawResponse?.length || 0,
-          },
-        });
-        console.error(`Pipeline summary saved to: ${pipelineDumpPath}`);
-      }
-      // #endregion DEBUG_LOGGING
+    // Report parsing results
+    const completeSections = sections.filter(s => s.complete).map(s => s.name);
+    const incompleteSections = sections.filter(s => !s.complete).map(s => s.name);
 
-      // Try to extract JSON from markdown code fences if direct parse fails
-      const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (jsonMatch) {
-        try {
-          structuredOutput = JSON.parse(jsonMatch[1].trim());
-          console.log('\nExtracted JSON from markdown code fence');
-        } catch (fenceParseError) {
-          debugLog(`Failed to parse JSON from code fence: ${fenceParseError}`);
-          throw new Error(`Failed to parse chairman output as JSON: ${parseError}`);
-        }
-      } else {
-        // Check if response looks like an error message
-        if (rawResponse.startsWith('Error') || rawResponse.includes('Error from')) {
-          console.error('\n*** CHAIRMAN RETURNED AN ERROR MESSAGE ***');
-          console.error('This usually indicates an API error (rate limit, context too long, or service issue)');
-          debugLog(`Chairman returned error message: ${rawResponse}`);
-        }
-        throw new Error(`Chairman did not return valid JSON: ${parseError}`);
+    console.log(`\nParsed ${completeSections.length} complete sections from two-pass chairman`);
+    if (DEBUG_LOGGING_ENABLED) {
+      console.log(`  Complete: ${completeSections.join(', ')}`);
+      if (incompleteSections.length > 0) {
+        console.log(`  Incomplete/truncated: ${incompleteSections.join(', ')}`);
       }
     }
+
+    // Helper to get section content with fallback
+    const getSection = (name: string, required = false): string => {
+      const section = sectionMap.get(name);
+      if (!section) {
+        if (required) {
+          console.warn(`  Warning: Required section '${name}' not found`);
+        }
+        return '';
+      }
+      if (!section.complete) {
+        console.warn(`  Warning: Section '${name}' may be truncated`);
+      }
+      return section.content;
+    };
+
+    // Helper to parse JSON section with auto-repair
+    const parseJsonSection = <T>(name: string, required = false): T | null => {
+      const content = getSection(name, required);
+      if (!content) return null;
+
+      try {
+        return JSON.parse(content);
+      } catch {
+        // Try auto-repair for truncated JSON
+        const repaired = repairTruncatedJson(content);
+        if (repaired) {
+          try {
+            const parsed = JSON.parse(repaired);
+            console.log(`  Note: Section '${name}' JSON was auto-repaired`);
+            return parsed;
+          } catch {
+            // Fall through
+          }
+        }
+        console.warn(`  Warning: Failed to parse JSON in section '${name}'`);
+        return null;
+      }
+    };
+
+    // Extract and parse sections
+    const executiveSummary = getSection('executive_summary', true);
+    const rawAmbiguities = parseJsonSection<ChairmanStructuredOutput['ambiguities']>('ambiguities', true) || [];
+    const consensusNotes = getSection('consensus_notes');
+    const implementationPhases = parseJsonSection<ChairmanStructuredOutput['implementation_phases']>('implementation_phases') || [];
+
+    // Extract spec sections (from Pass 2)
+    const specSections: ChairmanStructuredOutput['spec_sections'] = {
+      architecture: getSection('architecture', true),
+      data_model: getSection('data_model', true),
+      api_contracts: getSection('api_contracts', true),
+      user_flows: getSection('user_flows', true),
+      security: getSection('security', true),
+      deployment: getSection('deployment', true),
+    };
+
+    // Build structured output from sections
+    const structuredOutput: ChairmanStructuredOutput = {
+      executive_summary: executiveSummary,
+      ambiguities: rawAmbiguities,
+      spec_sections: specSections,
+      implementation_phases: implementationPhases,
+      consensus_notes: consensusNotes,
+    };
 
     // Convert structured ambiguities to our Ambiguity type
     const ambiguities: Ambiguity[] = structuredOutput.ambiguities.map((a, idx) => ({
@@ -503,13 +770,15 @@ console.log('');
 
 // Show config source if overridden
 const preferences = loadPreferences();
-if (preferences || process.env.COUNCIL_RESPONDERS || process.env.COUNCIL_EVALUATORS || process.env.COUNCIL_CHAIRMAN) {
+const presetUsed = (effectiveCouncil as any).preset;
+if (presetUsed || preferences || process.env.COUNCIL_RESPONDERS || process.env.COUNCIL_EVALUATORS || process.env.COUNCIL_CHAIRMAN) {
   console.log('Config overrides applied:');
+  if (presetUsed) console.log(`  COUNCIL_PRESET: ${presetUsed} (from agent-council)`);
   if (process.env.COUNCIL_RESPONDERS) console.log('  COUNCIL_RESPONDERS (env)');
   if (process.env.COUNCIL_EVALUATORS) console.log('  COUNCIL_EVALUATORS (env)');
   if (process.env.COUNCIL_CHAIRMAN) console.log('  COUNCIL_CHAIRMAN (env)');
   if (process.env.COUNCIL_TIMEOUT) console.log('  COUNCIL_TIMEOUT (env)');
-  if (preferences) console.log('  state/council-preferences.json');
+  if (preferences && !presetUsed) console.log('  state/council-preferences.json');
   console.log('');
 }
 
