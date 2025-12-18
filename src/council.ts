@@ -245,7 +245,13 @@ Analyze these requirements and produce:
 
 Also identify any **ambiguities, contradictions, or missing information** that would need human clarification before implementation.
 
-Be specific and technical. This output will be used to generate a detailed specification.`;
+Be specific and technical. This output will be used to generate a detailed specification.
+
+**Guidelines:**
+- Where possible, explain the reasoning behind your recommendations
+- If you reference industry standards, protocols, or best practices, cite them (but do not invent references)
+- Indicate confidence level when making assumptions about unspecified requirements
+- Prioritize practical, implementable solutions over theoretical ideals`;
 }
 
 function hashInterview(interview: InterviewOutput): string {
