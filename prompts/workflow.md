@@ -101,7 +101,13 @@ The council runs automatically. Wait for it to complete.
 
 ## Phase 3: Validation
 
-Read `state/council-output.json`.
+Read `state/council-output.json` or use the validation helper:
+
+```bash
+npm run validate status    # Check current state
+npm run validate questions # List all questions to resolve
+npm run validate template  # Generate decisions.json template
+```
 
 For each ambiguity:
 1. Explain it clearly to the human

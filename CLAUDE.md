@@ -17,6 +17,7 @@ This project generates software specifications through AI-assisted requirements 
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
   - `npm run council` - Launch the agent council
+  - `npm run validate [command]` - Validation helper (see below)
   - `npm run finalize` - Compile final specification from interview + council + decisions
 - **Read files** for context (config.json, prompts/workflow.md, existing state files)
 
@@ -77,6 +78,14 @@ Review council output. Present ambiguities to user. Record decisions in `state/d
 
 See `schemas/decisions.json` for full schema.
 
+**Validation Helper Commands:**
+```bash
+npm run validate status    # Show validation status (default)
+npm run validate template  # Generate decisions.json template
+npm run validate questions # List all open questions
+npm run validate check     # Validate decisions.json (exit code for CI)
+```
+
 ### 4. Finalize
 Run:
 ```bash
@@ -89,6 +98,14 @@ This compiles `state/spec-final.json` from:
 - `state/decisions.json` (human decisions)
 
 **Do NOT manually write spec-final.json** - always use the finalize command.
+
+## Schemas
+
+JSON schemas for state files are in `schemas/`:
+- `schemas/interview-output.json` - Interview output structure
+- `schemas/decisions.json` - Validation decisions structure
+
+Use these schemas as reference when writing state files. They document required fields, types, and provide examples.
 
 ## Configuration
 

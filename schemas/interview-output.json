@@ -1,0 +1,216 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Interview Output",
+  "description": "Structured output from the interview phase of spec-workflow",
+  "type": "object",
+  "required": ["problem_statement", "core_functionality"],
+  "properties": {
+    "project_name": {
+      "type": "string",
+      "description": "Human-readable project name"
+    },
+    "interview_completed": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when interview was completed"
+    },
+    "problem_statement": {
+      "type": "object",
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "One-sentence summary of the problem being solved"
+        },
+        "context": {
+          "type": "string",
+          "description": "Background context explaining why this problem exists"
+        },
+        "motivation": {
+          "type": "string",
+          "description": "Why solving this problem matters"
+        }
+      }
+    },
+    "users_and_actors": {
+      "type": "array",
+      "description": "Who will use the system and their goals",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Role name (e.g., 'Admin', 'End User', 'API Consumer')"
+          },
+          "description": {
+            "type": "string",
+            "description": "What this actor does and their context"
+          },
+          "goals": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "What this actor is trying to accomplish"
+          }
+        }
+      }
+    },
+    "core_functionality": {
+      "type": "array",
+      "description": "Features the system must provide",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["feature", "priority"],
+        "properties": {
+          "feature": {
+            "type": "string",
+            "description": "Feature name"
+          },
+          "description": {
+            "type": "string",
+            "description": "What the feature does"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["must_have", "should_have", "nice_to_have"],
+            "description": "Feature priority (MoSCoW)"
+          }
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "description": "Technical and business constraints",
+      "properties": {
+        "tech_stack": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            { "type": "object" }
+          ],
+          "description": "Required or preferred technologies"
+        },
+        "timeline": {
+          "type": "string",
+          "description": "Project timeline or deadline"
+        },
+        "budget": {
+          "type": "string",
+          "description": "Budget constraints"
+        },
+        "compliance": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Regulatory requirements (GDPR, HIPAA, etc.)"
+        }
+      }
+    },
+    "integration_points": {
+      "type": "array",
+      "description": "External systems the project must integrate with",
+      "items": {
+        "type": "object",
+        "required": ["system", "type", "direction"],
+        "properties": {
+          "system": {
+            "type": "string",
+            "description": "Name of the external system"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["api", "database", "file", "event", "network", "storage", "other"],
+            "description": "Type of integration"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["inbound", "outbound", "bidirectional"],
+            "description": "Data flow direction"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional details about the integration"
+          }
+        }
+      }
+    },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "How we will know the project succeeded"
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What we are explicitly NOT building"
+    },
+    "open_questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Questions that could not be resolved during interview"
+    },
+    "raw_notes": {
+      "type": "string",
+      "description": "Optional free-form notes from the interview"
+    },
+    "_extended_details": {
+      "type": "object",
+      "description": "Optional additional structured details beyond the core schema",
+      "additionalProperties": true
+    }
+  },
+  "examples": [
+    {
+      "project_name": "Task Management API",
+      "interview_completed": "2025-12-18T10:00:00Z",
+      "problem_statement": {
+        "summary": "Teams need a simple way to track and assign tasks",
+        "context": "Current spreadsheet-based tracking is error-prone and doesn't scale",
+        "motivation": "Improve team productivity and visibility into project status"
+      },
+      "users_and_actors": [
+        {
+          "name": "Team Lead",
+          "description": "Creates and assigns tasks, monitors progress",
+          "goals": ["See all tasks at a glance", "Know what's blocked"]
+        },
+        {
+          "name": "Developer",
+          "description": "Works on assigned tasks",
+          "goals": ["Know what to work on next", "Update task status easily"]
+        }
+      ],
+      "core_functionality": [
+        {
+          "feature": "Task CRUD",
+          "description": "Create, read, update, delete tasks",
+          "priority": "must_have"
+        },
+        {
+          "feature": "Assignment",
+          "description": "Assign tasks to team members",
+          "priority": "must_have"
+        },
+        {
+          "feature": "Due dates",
+          "description": "Set and track due dates",
+          "priority": "should_have"
+        }
+      ],
+      "constraints": {
+        "tech_stack": ["Node.js", "PostgreSQL"],
+        "timeline": "4 weeks to MVP",
+        "compliance": []
+      },
+      "success_criteria": [
+        "Team can create and track 100+ tasks",
+        "Response time under 200ms for all operations"
+      ],
+      "out_of_scope": [
+        "Mobile app",
+        "Real-time collaboration",
+        "File attachments"
+      ]
+    }
+  ]
+}
