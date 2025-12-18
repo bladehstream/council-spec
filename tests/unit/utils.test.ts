@@ -31,22 +31,25 @@ describe('formatList', () => {
 });
 
 describe('extractAmbiguities', () => {
-  it('should extract ambiguities with various patterns', () => {
+  it('should extract questions from markdown tables', () => {
     const synthesis = `
-## Analysis
+### Critical Questions
 
-Ambiguity: The user authentication method is not specified.
-Clarification needed: Should we support OAuth or just email/password?
-Question: What is the expected user load?
-Missing information: Database backup strategy not defined.
+| # | Question | Impact | Recommendation |
+|---|----------|--------|----------------|
+| 1 | **Minimum iOS version?** | Affects API availability | iOS 16+ recommended |
+| 2 | **What is the bitrate floor?** | Video quality threshold | 250 kbps |
+| 3 | **Remote onboarding priority?** | Which method first | QR code primary |
     `;
 
     const result = extractAmbiguities(synthesis);
 
-    expect(result.length).toBe(4);
+    expect(result.length).toBe(3);
     expect(result[0].id).toBe('AMB-1');
-    expect(result[0].description).toBe('The user authentication method is not specified.');
+    expect(result[0].description).toBe('Minimum iOS version?');
     expect(result[0].source).toBe('divergent_responses');
+    expect(result[1].description).toBe('What is the bitrate floor?');
+    expect(result[2].description).toBe('Remote onboarding priority?');
   });
 
   it('should return empty array for synthesis without ambiguities', () => {
@@ -55,150 +58,175 @@ Missing information: Database backup strategy not defined.
     expect(result).toEqual([]);
   });
 
-  it('should handle multiple ambiguities of same type', () => {
+  it('should extract questions from bullet points', () => {
     const synthesis = `
-Question: First question here
-Question: Second question here
+## Open Questions
+
+- **Should we support OAuth?**
+- **What is the expected user load?**
     `;
 
     const result = extractAmbiguities(synthesis);
     expect(result.length).toBe(2);
     expect(result[0].id).toBe('AMB-1');
-    expect(result[1].id).toBe('AMB-2');
+    expect(result[0].description).toBe('Should we support OAuth?');
+    expect(result[1].description).toBe('What is the expected user load?');
   });
 
-  it('should handle unclear pattern', () => {
-    const synthesis = 'Unclear: The scope of the project needs definition.';
+  it('should skip table header rows', () => {
+    const synthesis = `
+| # | Question | Impact |
+|---|----------|--------|
+| 1 | **What framework to use?** | Architecture choice |
+    `;
+
     const result = extractAmbiguities(synthesis);
     expect(result.length).toBe(1);
-    expect(result[0].description).toBe('The scope of the project needs definition.');
+    expect(result[0].description).toBe('What framework to use?');
+    // Should NOT contain "Question" from header
+    expect(result.every(a => !a.description.toLowerCase().includes('question'))).toBe(true);
   });
 
-  it('should handle ambiguities plural form', () => {
-    const synthesis = 'Ambiguities: Multiple areas need clarification including auth and storage.';
+  it('should extract from Critical sections with recommendations', () => {
+    const synthesis = `
+### Critical
+
+| # | Issue | Impact | Recommendation |
+|---|-------|--------|----------------|
+| 1 | **Database selection** | Performance | Use PostgreSQL |
+| 2 | **Auth method** | Security | JWT with refresh |
+    `;
+
     const result = extractAmbiguities(synthesis);
+    expect(result.length).toBe(2);
+    expect(result[0].description).toBe('Database selection');
+    expect(result[1].description).toBe('Auth method');
+  });
+
+  it('should deduplicate similar questions', () => {
+    const synthesis = `
+| 1 | **What is the timeout?** | Config |
+
+- **What is the timeout?**
+    `;
+
+    const result = extractAmbiguities(synthesis);
+    // Should only have one, not two
     expect(result.length).toBe(1);
-    expect(result[0].description).toContain('Multiple areas');
-  });
-
-  it('should trim whitespace from descriptions', () => {
-    const synthesis = 'Question:   Lots of spaces here   ';
-    const result = extractAmbiguities(synthesis);
-    expect(result[0].description).toBe('Lots of spaces here');
   });
 });
 
 describe('extractSpecSections', () => {
-  it('should extract architecture section', () => {
+  it('should extract numbered architecture section', () => {
     const synthesis = `
-## Architecture:
+## 1. Architecture Recommendations
 The system uses a microservices architecture with three main services.
 
-## Security:
-JWT-based authentication with refresh tokens.
+## 2. Data Model
+Users, Orders, and Products are the main entities.
     `;
 
     const result = extractSpecSections(synthesis);
     expect(result.architecture).toContain('microservices architecture');
-    expect(result.security).toContain('JWT-based authentication');
   });
 
-  it('should extract data model section', () => {
+  it('should extract numbered data model section', () => {
     const synthesis = `
-## Data Model:
+## 1. Architecture
+Some architecture content.
+
+## 2. Data Model
 Users, Orders, and Products are the main entities.
 
-## Other:
-Some other content.
+## 3. API Contracts
+REST endpoints here.
     `;
 
     const result = extractSpecSections(synthesis);
     expect(result.data_model).toContain('Users, Orders, and Products');
   });
 
-  it('should return empty object for synthesis without sections', () => {
+  it('should return empty object for synthesis without numbered sections', () => {
     const synthesis = 'Just some plain text without any section headers.';
     const result = extractSpecSections(synthesis);
     expect(Object.keys(result).length).toBe(0);
   });
 
-  it('should handle alternative section names', () => {
+  it('should extract all six standard sections', () => {
     const synthesis = `
-## System Design:
-A monolithic application design.
+## 1. Architecture Recommendations
+Microservices design pattern.
 
-## Entities:
+## 2. Data Model
 User, Product, Order entities.
 
-## Endpoints:
-REST API endpoints.
+## 3. API Contracts
+REST API with versioning.
 
-## Authentication:
+## 4. User Flows
+Checkout flow details.
+
+## 5. Security Considerations
 OAuth 2.0 implementation.
 
-## Infrastructure:
-AWS deployment.
-
-## User Journey:
-Checkout flow.
+## 6. Deployment Strategy
+AWS with auto-scaling.
     `;
 
     const result = extractSpecSections(synthesis);
-    expect(result.architecture).toContain('monolithic');
+    expect(result.architecture).toContain('Microservices');
     expect(result.data_model).toContain('User, Product, Order');
     expect(result.api_contracts).toContain('REST API');
+    expect(result.user_flows).toContain('Checkout');
     expect(result.security).toContain('OAuth 2.0');
     expect(result.deployment).toContain('AWS');
-    expect(result.user_flows).toContain('Checkout');
   });
 
-  it('should handle Database as data model header', () => {
+  it('should handle section content until next numbered section', () => {
     const synthesis = `
-## Database:
-PostgreSQL with normalized schema.
+## 1. Architecture
+First line of architecture.
+Second line of architecture.
+
+### Subsection
+More details here.
+
+## 2. Data Model
+Data model content.
     `;
 
     const result = extractSpecSections(synthesis);
-    expect(result.data_model).toContain('PostgreSQL');
+    expect(result.architecture).toContain('First line');
+    expect(result.architecture).toContain('Subsection');
+    expect(result.architecture).not.toContain('Data model content');
   });
 
-  it('should handle Critical Paths as user flows header', () => {
+  it('should handle last section without trailing section', () => {
     const synthesis = `
-## Critical Paths:
-Login -> Dashboard -> Action.
+## 5. Security
+Security content here.
+More security details.
+
+Some final notes.
     `;
 
     const result = extractSpecSections(synthesis);
-    expect(result.user_flows).toContain('Login');
+    expect(result.security).toContain('Security content');
+    expect(result.security).toContain('final notes');
   });
 
-  it('should handle Authorization as security header', () => {
+  it('should truncate very long sections', () => {
+    const longContent = 'x'.repeat(6000);
     const synthesis = `
-## Authorization:
-Role-based access control.
+## 1. Architecture
+${longContent}
+
+## 2. Data Model
+Short content.
     `;
 
     const result = extractSpecSections(synthesis);
-    expect(result.security).toContain('Role-based');
-  });
-
-  it('should handle Scaling as deployment header', () => {
-    const synthesis = `
-## Scaling:
-Horizontal scaling with load balancer.
-    `;
-
-    const result = extractSpecSections(synthesis);
-    expect(result.deployment).toContain('Horizontal scaling');
-  });
-
-  it('should handle Interfaces as api_contracts header', () => {
-    const synthesis = `
-## Interfaces:
-GraphQL API with subscriptions.
-    `;
-
-    const result = extractSpecSections(synthesis);
-    expect(result.api_contracts).toContain('GraphQL');
+    expect(result.architecture!.length).toBeLessThanOrEqual(5020); // 5000 + truncation message
+    expect(result.architecture).toContain('[truncated]');
   });
 });
