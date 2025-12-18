@@ -165,7 +165,3 @@ Contains all interview Q&A, council execution details, validation decisions, and
 ## Related Projects
 
 - [agent-council-testing](https://github.com/bladehstream/agent-council-testing) - Multi-model AI council CLI
-
-## License
-
-MIT
