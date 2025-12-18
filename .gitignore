@@ -12,6 +12,7 @@ coverage/
 state/*.json
 state/*.log
 state/conversations/*.log
+state/debug/
 
 # Keep directory structure
 !state/.gitkeep

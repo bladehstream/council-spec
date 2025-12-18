@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -111,6 +111,37 @@ function log(message: string): void {
     appendFileSync(logFile, message + '\n');
   }
 }
+
+// #region DEBUG_LOGGING - Remove this region to disable verbose logging
+const DEBUG_LOGGING_ENABLED = true;
+
+function getDebugDir(): string {
+  const debugDir = join(ROOT, 'state', 'debug');
+  if (!existsSync(debugDir)) {
+    mkdirSync(debugDir, { recursive: true });
+  }
+  return debugDir;
+}
+
+function saveDebugDump(filename: string, data: unknown): string {
+  if (!DEBUG_LOGGING_ENABLED) return '';
+  const debugDir = getDebugDir();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filepath = join(debugDir, `${timestamp}_${filename}`);
+  writeFileSync(filepath, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+  return filepath;
+}
+
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  return str.substring(0, maxLen) + `... [truncated, ${str.length} total chars]`;
+}
+
+function debugLog(message: string): void {
+  if (!DEBUG_LOGGING_ENABLED) return;
+  log(message);
+}
+// #endregion DEBUG_LOGGING
 
 function loadConfig(): Config {
   return JSON.parse(readFileSync(join(ROOT, 'config.json'), 'utf-8'));
@@ -275,12 +306,45 @@ Starting council...
       callbacks: {
         onStage1Complete: (results) => {
           console.log(`\nStage 1 complete: ${results.length} responses`);
+          // #region DEBUG_LOGGING - verbose stage 1 logging
+          if (DEBUG_LOGGING_ENABLED) {
+            results.forEach((r, i) => {
+              const size = r.response?.length || 0;
+              console.log(`  [${i + 1}] ${r.agent}: ${size} chars`);
+              debugLog(`Stage 1 response ${i + 1} (${r.agent}): ${size} chars`);
+            });
+            const totalSize = results.reduce((sum, r) => sum + (r.response?.length || 0), 0);
+            console.log(`  Total Stage 1 size: ${totalSize} chars`);
+            debugLog(`Stage 1 total response size: ${totalSize} chars`);
+          }
+          // #endregion DEBUG_LOGGING
         },
         onStage2Complete: (rankings, aggregate) => {
           console.log(`\nStage 2 complete: ${rankings.length} rankings`);
+          // #region DEBUG_LOGGING - verbose stage 2 logging
+          if (DEBUG_LOGGING_ENABLED) {
+            rankings.forEach((r, i) => {
+              console.log(`  [${i + 1}] ${r.agent}: ranked ${r.parsedRanking?.join(' > ') || 'parse failed'}`);
+              debugLog(`Stage 2 ranking ${i + 1} (${r.agent}): ${r.parsedRanking?.join(' > ') || 'PARSE FAILED'}`);
+            });
+            if (aggregate) {
+              console.log(`  Aggregate scores: ${aggregate.map(a => `${a.agent}=${a.averageRank.toFixed(2)}`).join(', ')}`);
+            }
+          }
+          // #endregion DEBUG_LOGGING
         },
         onStage3Complete: (synthesis) => {
-          console.log(`\nStage 3 complete: Chairman synthesis received`);
+          const size = synthesis?.response?.length || 0;
+          console.log(`\nStage 3 complete: Chairman synthesis received (${size} chars)`);
+          // #region DEBUG_LOGGING - verbose stage 3 logging
+          if (DEBUG_LOGGING_ENABLED) {
+            debugLog(`Stage 3 chairman response size: ${size} chars`);
+            if (synthesis?.response) {
+              const preview = truncate(synthesis.response, 200);
+              console.log(`  Preview: ${preview}`);
+            }
+          }
+          // #endregion DEBUG_LOGGING
         },
       },
     });
@@ -298,16 +362,56 @@ Starting council...
       structuredOutput = JSON.parse(rawResponse);
       console.log('\nSuccessfully parsed structured chairman output');
     } catch (parseError) {
+      // #region DEBUG_LOGGING - chairman parse error diagnostics
+      console.error('\n--- CHAIRMAN PARSE ERROR ---');
+      console.error(`Raw response (first 500 chars): ${truncate(rawResponse, 500)}`);
+      debugLog(`Chairman parse error. Raw response preview: ${truncate(rawResponse, 1000)}`);
+
+      if (DEBUG_LOGGING_ENABLED) {
+        // Save full debug dump
+        const dumpPath = saveDebugDump('chairman-raw-response.txt', rawResponse);
+        console.error(`Full response saved to: ${dumpPath}`);
+        debugLog(`Full chairman response saved to: ${dumpPath}`);
+
+        // Also save the full pipeline result for context
+        const pipelineDumpPath = saveDebugDump('pipeline-result.json', {
+          stage1: result.stage1.map(s => ({
+            agent: s.agent,
+            responseLength: s.response?.length || 0,
+            responsePreview: truncate(s.response || '', 500),
+          })),
+          stage2: result.stage2.map(s => ({
+            agent: s.agent,
+            parsedRanking: s.parsedRanking,
+            rankingRawLength: s.rankingRaw?.length || 0,
+          })),
+          aggregate: result.aggregate,
+          stage3: {
+            agent: result.stage3.agent,
+            responseLength: rawResponse?.length || 0,
+          },
+        });
+        console.error(`Pipeline summary saved to: ${pipelineDumpPath}`);
+      }
+      // #endregion DEBUG_LOGGING
+
       // Try to extract JSON from markdown code fences if direct parse fails
       const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) {
         try {
           structuredOutput = JSON.parse(jsonMatch[1].trim());
           console.log('\nExtracted JSON from markdown code fence');
-        } catch {
+        } catch (fenceParseError) {
+          debugLog(`Failed to parse JSON from code fence: ${fenceParseError}`);
           throw new Error(`Failed to parse chairman output as JSON: ${parseError}`);
         }
       } else {
+        // Check if response looks like an error message
+        if (rawResponse.startsWith('Error') || rawResponse.includes('Error from')) {
+          console.error('\n*** CHAIRMAN RETURNED AN ERROR MESSAGE ***');
+          console.error('This usually indicates an API error (rate limit, context too long, or service issue)');
+          debugLog(`Chairman returned error message: ${rawResponse}`);
+        }
         throw new Error(`Chairman did not return valid JSON: ${parseError}`);
       }
     }
