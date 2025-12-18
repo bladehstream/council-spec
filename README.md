@@ -4,7 +4,7 @@ AI-powered software specification generation using multi-agent consensus.
 
 ## Overview
 
-Council Spec guides you through a structured process to transform project ideas into detailed technical specifications. It uses a multi-agent council (powered by [agent-council](https://github.com/bladehstream/agent-council-testing)) to analyze requirements from multiple perspectives and synthesize comprehensive specs.
+Council Spec guides you through a structured process to transform project ideas into detailed technical specifications. It uses a multi-agent council (powered by [agent-council](https://github.com/bladehstream/agent-council)) to analyze requirements from multiple perspectives and synthesize comprehensive specs.
 
 ## How It Works
 
@@ -71,13 +71,9 @@ npm run build
 ### Prerequisites
 
 - Node.js 18+
-- [agent-council](https://github.com/bladehstream/agent-council-testing) cloned adjacent to this repo:
-  ```
-  parent-directory/
-  ├── council-spec/          # This repo
-  └── agent-council/
-      └── repo/              # agent-council-testing clone
-  ```
+- At least 2 AI CLI tools installed and authenticated (Claude Code, Codex CLI, or Gemini CLI)
+
+The [agent-council](https://github.com/bladehstream/agent-council) dependency is installed automatically from GitHub.
 
 ## Usage
 
@@ -164,4 +160,4 @@ Contains all interview Q&A, council execution details, validation decisions, and
 
 ## Related Projects
 
-- [agent-council-testing](https://github.com/bladehstream/agent-council-testing) - Multi-model AI council CLI
+- [agent-council](https://github.com/bladehstream/agent-council) - Multi-model AI council CLI

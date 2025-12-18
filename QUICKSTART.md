@@ -5,15 +5,10 @@ Get from idea to specification in 4 phases.
 ## Prerequisites
 
 1. **Node.js 18+** installed
-2. **agent-council** set up adjacent to this repo:
-   ```bash
-   # From the parent directory of council-spec
-   git clone https://github.com/bladehstream/agent-council-testing.git agent-council/repo
-   cd agent-council/repo
-   npm install
-   npm run build
-   ```
-3. **API keys** configured for agent-council (see agent-council docs)
+2. At least 2 AI CLI tools installed and authenticated:
+   - Claude Code: `npm install -g @anthropic-ai/claude-code` then `claude auth`
+   - Codex CLI: `npm install -g @openai/codex` then `codex auth`
+   - Gemini CLI: `npm install -g @google/gemini-cli` then `gemini auth`
 
 ## Setup
 
@@ -133,11 +128,12 @@ Increase timeout in `config.json`:
 
 ### No agents available
 
-Ensure agent-council has API keys configured:
+Ensure you have at least 2 AI CLI tools installed and authenticated:
 ```bash
-cd ../agent-council/repo
-cat models.json
+which claude codex gemini
 ```
+
+If the commands don't exist, install them from the Prerequisites section above.
 
 ### Type errors in interview output
 

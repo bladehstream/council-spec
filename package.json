@@ -19,7 +19,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "agent-council": "file:../agent-council/repo"
+    "agent-council": "github:bladehstream/agent-council#main"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

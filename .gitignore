@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-agent-council-testing/
+agent-council/
 
 # Build output
 dist/
