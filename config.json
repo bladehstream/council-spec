@@ -13,6 +13,6 @@
     "responders": "3:default",
     "evaluators": "3:default",
     "chairman": "claude:heavy",
-    "timeout_seconds": 180
+    "timeout_seconds": 420
   }
 }
