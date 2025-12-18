@@ -10,12 +10,14 @@ This project generates software specifications through AI-assisted requirements 
 - **Create/modify files in `state/`**:
   - `state/interview-output.json` - Interview results
   - `state/council-output.json` - Council results (created by `npm run council`)
-  - `state/spec-final.json` - Final specification
+  - `state/decisions.json` - Validation decisions (see schemas/decisions.json)
+  - `state/spec-final.json` - Final specification (created by `npm run finalize`)
   - `state/council-preferences.json` - User's council configuration preferences
   - `state/conversations/*.log` - Conversation logs
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
   - `npm run council` - Launch the agent council
+  - `npm run finalize` - Compile final specification from interview + council + decisions
 - **Read files** for context (config.json, prompts/workflow.md, existing state files)
 
 ### Prohibited Actions
@@ -57,10 +59,36 @@ This invokes agent-council with the configuration in `config.json`:
 Output goes to `state/council-output.json`.
 
 ### 3. Validation
-Review council output. Present ambiguities to user. Record decisions.
+Review council output. Present ambiguities to user. Record decisions in `state/decisions.json`:
+
+```json
+{
+  "decisions": [
+    {
+      "id": "minimum_ios_version",
+      "question": "What is the minimum iOS version to support?",
+      "decision": "iOS 16+",
+      "rationale": "Neural Engine v2, modern AVFoundation APIs"
+    }
+  ],
+  "validated_at": "2025-12-18T15:00:00Z"
+}
+```
+
+See `schemas/decisions.json` for full schema.
 
 ### 4. Finalize
-Compile final spec to `state/spec-final.json`.
+Run:
+```bash
+npm run finalize
+```
+
+This compiles `state/spec-final.json` from:
+- `state/interview-output.json` (requirements)
+- `state/council-output.json` (analysis)
+- `state/decisions.json` (human decisions)
+
+**Do NOT manually write spec-final.json** - always use the finalize command.
 
 ## Configuration
 

@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Validation Decisions",
+  "description": "Human decisions resolving ambiguities identified by the council",
+  "type": "object",
+  "required": ["decisions"],
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "description": "Array of decisions resolving council-identified ambiguities",
+      "items": {
+        "type": "object",
+        "required": ["id", "question", "decision"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the decision (e.g., 'ios_version', 'bitrate_floor')"
+          },
+          "question": {
+            "type": "string",
+            "description": "The question or ambiguity being resolved"
+          },
+          "decision": {
+            "type": ["string", "number", "boolean", "array"],
+            "description": "The human's decision"
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Optional explanation for why this decision was made"
+          },
+          "options_considered": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional list of other options that were considered"
+          }
+        }
+      }
+    },
+    "validated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when validation was completed"
+    },
+    "validated_by": {
+      "type": "string",
+      "description": "Identifier of who performed the validation"
+    }
+  },
+  "examples": [
+    {
+      "decisions": [
+        {
+          "id": "minimum_ios_version",
+          "question": "What is the minimum iOS version to support?",
+          "decision": "iOS 16+",
+          "rationale": "Neural Engine v2, modern AVFoundation APIs, broad device coverage"
+        },
+        {
+          "id": "adaptive_bitrate_floor_kbps",
+          "question": "What is the video bitrate floor before pausing video to preserve audio?",
+          "decision": 250,
+          "rationale": "Minimum viable H.264 quality at 360p"
+        },
+        {
+          "id": "remote_onboarding",
+          "question": "Which remote onboarding methods should be supported?",
+          "decision": ["qr", "pin", "deeplink"],
+          "rationale": "QR primary (most seamless), deep link (convenience), PIN (fallback)"
+        }
+      ],
+      "validated_at": "2025-12-18T15:00:00Z"
+    }
+  ]
+}

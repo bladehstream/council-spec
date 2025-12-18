@@ -122,27 +122,36 @@ Update the ambiguity's `resolution` field:
 
 ## Phase 4: Finalize
 
-Once all ambiguities are resolved, create `state/spec-final.json`:
+Once all ambiguities are resolved:
+
+1. Write all decisions to `state/decisions.json`:
 ```json
 {
-  "project_id": "...",
-  "version": "1.0.0",
-  "created_at": "ISO timestamp",
-  "interview_summary": "Brief summary of requirements",
   "decisions": [
-    {"ambiguity_id": "AMB-1", "decision": "...", "rationale": "..."}
+    {
+      "id": "minimum_ios_version",
+      "question": "What is the minimum iOS version to support?",
+      "decision": "iOS 16+",
+      "rationale": "Neural Engine v2, modern APIs"
+    },
+    {
+      "id": "bitrate_floor",
+      "question": "What is the video bitrate floor?",
+      "decision": 250,
+      "rationale": "Minimum viable H.264 at 360p"
+    }
   ],
-  "specification": {
-    "overview": "...",
-    "architecture": "From council + decisions",
-    "data_model": "...",
-    "api_contracts": "...",
-    "user_flows": "...",
-    "security": "...",
-    "deployment": "...",
-    "acceptance_criteria": ["...", "..."]
-  }
+  "validated_at": "2025-12-18T15:00:00Z"
 }
 ```
 
-Announce completion and offer to explain any part of the spec.
+2. Run the finalize command:
+```bash
+npm run finalize
+```
+
+This compiles the final specification from interview + council + decisions.
+
+**IMPORTANT**: Do NOT manually write `state/spec-final.json`. Always use the finalize command to ensure consistent output format.
+
+3. Announce completion and offer to explain any part of the spec.
