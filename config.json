@@ -1,0 +1,18 @@
+{
+  "models": {
+    "interview": {
+      "provider": "claude",
+      "model": "claude-opus-4-5-20250514"
+    },
+    "validation": {
+      "provider": "claude",
+      "model": "claude-opus-4-5-20250514"
+    }
+  },
+  "council": {
+    "responders": "3:heavy",
+    "evaluators": "3:heavy",
+    "chairman": "claude:heavy",
+    "timeout_seconds": 180
+  }
+}

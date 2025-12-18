@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+agent-council-testing/
+
+# Build output
+dist/
+
+# State files (project-specific, not committed)
+state/*.json
+state/*.log
+state/conversations/*.log
+
+# Keep directory structure
+!state/.gitkeep
+!state/conversations/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

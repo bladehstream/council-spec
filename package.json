@@ -1,0 +1,19 @@
+{
+  "name": "spec-workflow",
+  "version": "0.1.0",
+  "description": "AI-powered specification generation workflow using multi-agent consensus",
+  "type": "module",
+  "main": "dist/council.js",
+  "scripts": {
+    "build": "tsc",
+    "council": "node dist/council.js",
+    "init": "node dist/init.js"
+  },
+  "dependencies": {
+    "agent-council": "file:../agent-council/repo"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

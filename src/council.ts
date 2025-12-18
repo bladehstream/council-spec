@@ -1,0 +1,301 @@
+import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'fs';
+import { createHash } from 'crypto';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import {
+  runEnhancedPipeline,
+  parseStageSpec,
+  createAgentFromSpec,
+  listProviders,
+  loadModelsConfig,
+  type PipelineResult,
+  type EnhancedPipelineConfig,
+} from 'agent-council';
+import type { InterviewOutput, CouncilOutput, Config } from './types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const ROOT = join(__dirname, '..');
+
+function getActiveLogFile(): string | null {
+  const convDir = join(ROOT, 'state', 'conversations');
+  if (!existsSync(convDir)) return null;
+
+  const files = readdirSync(convDir)
+    .filter(f => f.endsWith('.log'))
+    .sort()
+    .reverse();
+
+  return files[0] ? join(convDir, files[0]) : null;
+}
+
+function log(message: string): void {
+  const logFile = getActiveLogFile();
+  if (logFile) {
+    appendFileSync(logFile, message + '\n');
+  }
+}
+
+function loadConfig(): Config {
+  return JSON.parse(readFileSync(join(ROOT, 'config.json'), 'utf-8'));
+}
+
+// Safely format a field that should be an array but might be string, object, or array
+function formatList(value: unknown, fallback = 'Not specified'): string {
+  if (!value) return fallback;
+  if (Array.isArray(value)) return value.join(', ') || fallback;
+  if (typeof value === 'string') return value || fallback;
+  if (typeof value === 'object') {
+    // Handle object with nested values (e.g., {frontend: "React", backend: "Node"})
+    return Object.entries(value)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(', ') || fallback;
+  }
+  return String(value);
+}
+
+function loadInterview(): InterviewOutput {
+  const path = join(ROOT, 'state', 'interview-output.json');
+  if (!existsSync(path)) {
+    console.error('Error: state/interview-output.json not found');
+    console.error('Complete the interview phase first.');
+    process.exit(1);
+  }
+  return JSON.parse(readFileSync(path, 'utf-8'));
+}
+
+function buildPrompt(interview: InterviewOutput): string {
+  return `You are analyzing requirements for a software project to produce a detailed specification.
+
+## Interview Output
+
+### Problem Statement
+${interview.problem_statement.summary}
+${interview.problem_statement.context ? `\nContext: ${interview.problem_statement.context}` : ''}
+${interview.problem_statement.motivation ? `\nMotivation: ${interview.problem_statement.motivation}` : ''}
+
+### Users and Actors
+${interview.users_and_actors?.map(u => `- **${u.name}**: ${u.description || 'No description'}`).join('\n') || 'Not specified'}
+
+### Core Functionality
+${interview.core_functionality.map(f => `- [${f.priority}] **${f.feature}**: ${f.description || 'No description'}`).join('\n')}
+
+### Constraints
+- Tech Stack: ${formatList(interview.constraints?.tech_stack)}
+- Timeline: ${interview.constraints?.timeline || 'Not specified'}
+- Budget: ${interview.constraints?.budget || 'Not specified'}
+- Compliance: ${formatList(interview.constraints?.compliance, 'None specified')}
+
+### Integration Points
+${interview.integration_points?.map(i => `- **${i.system}** (${i.type}, ${i.direction}): ${i.notes || 'No notes'}`).join('\n') || 'None specified'}
+
+### Success Criteria
+${interview.success_criteria?.map(c => `- ${c}`).join('\n') || 'Not specified'}
+
+### Out of Scope
+${interview.out_of_scope?.map(o => `- ${o}`).join('\n') || 'Not specified'}
+
+### Open Questions from Interview
+${interview.open_questions?.map(q => `- ${q}`).join('\n') || 'None'}
+
+---
+
+## Your Task
+
+Analyze these requirements and produce:
+
+1. **Architecture Recommendations**: High-level system design, components, and their interactions
+2. **Data Model**: Key entities, relationships, and storage considerations
+3. **API Contracts**: Main endpoints/interfaces the system needs
+4. **User Flows**: Critical paths through the system
+5. **Security Considerations**: Authentication, authorization, data protection
+6. **Deployment Strategy**: Infrastructure, scaling, monitoring
+
+Also identify any **ambiguities, contradictions, or missing information** that would need human clarification before implementation.
+
+Be specific and technical. This output will be used to generate a detailed specification.`;
+}
+
+function hashInterview(interview: InterviewOutput): string {
+  return createHash('sha256')
+    .update(JSON.stringify(interview))
+    .digest('hex')
+    .substring(0, 12);
+}
+
+async function runCouncil(prompt: string, config: Config): Promise<void> {
+  console.log('Starting council with configuration:');
+  console.log(`  Responders: ${config.council.responders}`);
+  console.log(`  Evaluators: ${config.council.evaluators}`);
+  console.log(`  Chairman: ${config.council.chairman}`);
+  console.log(`  Timeout: ${config.council.timeout_seconds}s`);
+  console.log('');
+
+  log(`
+--- PHASE: COUNCIL ---
+[${new Date().toISOString()}]
+
+Config:
+  Responders: ${config.council.responders}
+  Evaluators: ${config.council.evaluators}
+  Chairman: ${config.council.chairman}
+  Timeout: ${config.council.timeout_seconds}s
+
+Starting council...
+`);
+
+  try {
+    // Load models config and get available providers
+    const modelsConfig = loadModelsConfig();
+    const availableProviders = listProviders(modelsConfig);
+
+    // Parse stage specs from config
+    const stage1Spec = parseStageSpec(config.council.responders, availableProviders, modelsConfig);
+    const stage2Spec = parseStageSpec(config.council.evaluators, availableProviders, modelsConfig);
+    const chairman = createAgentFromSpec(config.council.chairman);
+
+    // Build pipeline config
+    const pipelineConfig: EnhancedPipelineConfig = {
+      stage1: { agents: stage1Spec.agents },
+      stage2: { agents: stage2Spec.agents },
+      stage3: {
+        chairman,
+        useReasoning: false,
+      },
+    };
+
+    // Run the council pipeline
+    const result = await runEnhancedPipeline(prompt, {
+      config: pipelineConfig,
+      timeoutMs: config.council.timeout_seconds * 1000,
+      tty: process.stdout.isTTY ?? false,
+      silent: false,
+      callbacks: {
+        onStage1Complete: (results) => {
+          console.log(`\nStage 1 complete: ${results.length} responses`);
+        },
+        onStage2Complete: (rankings, aggregate) => {
+          console.log(`\nStage 2 complete: ${rankings.length} rankings`);
+        },
+        onStage3Complete: (synthesis) => {
+          console.log(`\nStage 3 complete: Chairman synthesis received`);
+        },
+      },
+    });
+
+    if (!result) {
+      throw new Error('Council pipeline returned no results');
+    }
+
+    const interview = loadInterview();
+    const councilOutput: CouncilOutput = {
+      input_hash: hashInterview(interview),
+      timestamp: new Date().toISOString(),
+      stage1: result.stage1.map(s => ({
+        agent: s.agent,
+        response: s.response,
+      })),
+      stage2: {
+        rankings: result.stage2.map(s => ({
+          agent: s.agent,
+          ranking: s.parsedRanking,
+        })),
+        aggregate: result.aggregate.map(a => ({
+          agent: a.agent,
+          score: a.averageRank,
+        })),
+      },
+      stage3: {
+        chairman: result.stage3.agent,
+        synthesis: result.stage3.response,
+      },
+      ambiguities: extractAmbiguities(result.stage3.response),
+      spec_sections: extractSpecSections(result.stage3.response),
+    };
+
+    writeFileSync(
+      join(ROOT, 'state', 'council-output.json'),
+      JSON.stringify(councilOutput, null, 2)
+    );
+
+    log(`[${new Date().toISOString()}]
+Council complete.
+Agents used: ${councilOutput.stage1.map(s => s.agent).join(', ') || 'N/A'}
+Ambiguities found: ${councilOutput.ambiguities.length}
+Output written to state/council-output.json
+`);
+
+    console.log('\n\nCouncil complete. Output written to state/council-output.json');
+  } catch (error) {
+    console.error('Council failed:', error);
+    log(`[${new Date().toISOString()}]
+Council FAILED: ${error instanceof Error ? error.message : String(error)}
+`);
+    throw error;
+  }
+}
+
+function extractAmbiguities(synthesis: string): CouncilOutput['ambiguities'] {
+  // Basic extraction - looks for sections mentioning ambiguities, questions, or clarifications
+  const ambiguities: CouncilOutput['ambiguities'] = [];
+
+  const patterns = [
+    /ambiguit(?:y|ies)[:\s]+([^\n]+)/gi,
+    /clarification needed[:\s]+([^\n]+)/gi,
+    /unclear[:\s]+([^\n]+)/gi,
+    /question[:\s]+([^\n]+)/gi,
+    /missing information[:\s]+([^\n]+)/gi
+  ];
+
+  let id = 1;
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(synthesis)) !== null) {
+      ambiguities.push({
+        id: `AMB-${id++}`,
+        description: match[1].trim(),
+        source: 'divergent_responses',
+      });
+    }
+  }
+
+  return ambiguities;
+}
+
+function extractSpecSections(synthesis: string): CouncilOutput['spec_sections'] {
+  // Extract sections based on common headers
+  const sections: CouncilOutput['spec_sections'] = {};
+
+  const sectionPatterns: Record<keyof NonNullable<CouncilOutput['spec_sections']>, RegExp> = {
+    architecture: /(?:architecture|system design)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
+    data_model: /(?:data model|entities|database)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
+    api_contracts: /(?:api|endpoints|interfaces)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
+    user_flows: /(?:user flows|user journey|critical paths)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
+    security: /(?:security|authentication|authorization)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i,
+    deployment: /(?:deployment|infrastructure|scaling)[:\s]*\n([\s\S]*?)(?=\n##|\n\*\*|$)/i
+  };
+
+  for (const [key, pattern] of Object.entries(sectionPatterns)) {
+    const match = synthesis.match(pattern);
+    if (match) {
+      sections[key as keyof typeof sections] = match[1].trim();
+    }
+  }
+
+  return sections;
+}
+
+// Main
+const config = loadConfig();
+const interview = loadInterview();
+const prompt = buildPrompt(interview);
+
+console.log('='.repeat(60));
+console.log('SPEC WORKFLOW - Council Phase');
+console.log('='.repeat(60));
+console.log('');
+
+runCouncil(prompt, config).catch((err) => {
+  console.error('Council failed:', err);
+  process.exit(1);
+});
