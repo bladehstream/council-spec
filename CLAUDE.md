@@ -11,6 +11,7 @@ This project generates software specifications through AI-assisted requirements 
   - `state/interview-output.json` - Interview results
   - `state/council-output.json` - Council results (created by `npm run council`)
   - `state/spec-final.json` - Final specification
+  - `state/council-preferences.json` - User's council configuration preferences
   - `state/conversations/*.log` - Conversation logs
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
@@ -91,6 +92,39 @@ Edit `config.json` to change:
   "chairman": "claude:heavy"
 }
 ```
+
+### Runtime Configuration
+
+During the interview, ask: **"Would you like to customize the council structure?"**
+
+If yes, explain the available options and write preferences to `state/council-preferences.json`:
+
+```json
+{
+  "responders": "3:heavy",
+  "evaluators": "3:heavy",
+  "chairman": "claude:heavy",
+  "timeout_seconds": 300
+}
+```
+
+**Presets:**
+- `fast` - 3:fast responders, 3:fast evaluators, default chairman (quick iteration)
+- `balanced` - 3:default responders, 3:default evaluators, heavy chairman (default)
+- `thorough` - 3:heavy responders, 6:heavy evaluators, heavy chairman (maximum quality)
+
+**Environment Variables (highest priority):**
+```bash
+COUNCIL_RESPONDERS=3:heavy npm run council
+COUNCIL_EVALUATORS=6:heavy npm run council
+COUNCIL_CHAIRMAN=claude:heavy npm run council
+COUNCIL_TIMEOUT=300 npm run council
+```
+
+**Priority order:**
+1. Environment variables (highest)
+2. `state/council-preferences.json`
+3. `config.json` (lowest)
 
 ## Resuming After Context Reset
 

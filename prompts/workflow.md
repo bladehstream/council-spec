@@ -45,6 +45,35 @@ Gather requirements through conversation. You must collect:
 - Summarize what you've heard periodically
 - Note any open questions you couldn't resolve
 
+### Council Configuration
+
+Before completing the interview, ask:
+
+> "Would you like to customize the council structure?"
+
+If **no**, use defaults (balanced preset: 3:default responders/evaluators, heavy chairman).
+
+If **yes**, explain the options:
+- **fast** - Quick iteration (3:fast responders/evaluators, default chairman)
+- **balanced** - Default (3:default responders/evaluators, heavy chairman)
+- **thorough** - Maximum quality (3:heavy responders, 6:heavy evaluators, heavy chairman)
+
+Or let them specify custom values:
+- Responders: count and tier (e.g., "3:heavy" or "claude:heavy,gemini:heavy")
+- Evaluators: count and tier
+- Chairman: provider:tier (e.g., "claude:heavy")
+- Timeout: seconds (default 180)
+
+Write their preferences to `state/council-preferences.json`:
+```json
+{
+  "responders": "3:heavy",
+  "evaluators": "3:heavy",
+  "chairman": "claude:heavy",
+  "timeout_seconds": 300
+}
+```
+
 ### Completing the Interview
 
 When you have sufficient information, tell the user you're ready to compile the interview output. Then write `state/interview-output.json` with the structured data.

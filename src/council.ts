@@ -40,6 +40,44 @@ function loadConfig(): Config {
   return JSON.parse(readFileSync(join(ROOT, 'config.json'), 'utf-8'));
 }
 
+interface CouncilPreferences {
+  responders?: string;
+  evaluators?: string;
+  chairman?: string;
+  timeout_seconds?: number;
+}
+
+function loadPreferences(): CouncilPreferences | null {
+  const path = join(ROOT, 'state', 'council-preferences.json');
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function getEffectiveCouncilConfig(config: Config): Config['council'] {
+  const preferences = loadPreferences();
+
+  // Priority: env vars > preferences > config.json
+  return {
+    responders: process.env.COUNCIL_RESPONDERS
+      || preferences?.responders
+      || config.council.responders,
+    evaluators: process.env.COUNCIL_EVALUATORS
+      || preferences?.evaluators
+      || config.council.evaluators,
+    chairman: process.env.COUNCIL_CHAIRMAN
+      || preferences?.chairman
+      || config.council.chairman,
+    timeout_seconds: process.env.COUNCIL_TIMEOUT
+      ? parseInt(process.env.COUNCIL_TIMEOUT, 10)
+      : preferences?.timeout_seconds
+      ?? config.council.timeout_seconds,
+  };
+}
+
 // Safely format a field that should be an array but might be string, object, or array
 function formatList(value: unknown, fallback = 'Not specified'): string {
   if (!value) return fallback;
@@ -287,6 +325,9 @@ function extractSpecSections(synthesis: string): CouncilOutput['spec_sections'] 
 
 // Main
 const config = loadConfig();
+const effectiveCouncil = getEffectiveCouncilConfig(config);
+const effectiveConfig: Config = { ...config, council: effectiveCouncil };
+
 const interview = loadInterview();
 const prompt = buildPrompt(interview);
 
@@ -295,7 +336,19 @@ console.log('SPEC WORKFLOW - Council Phase');
 console.log('='.repeat(60));
 console.log('');
 
-runCouncil(prompt, config).catch((err) => {
+// Show config source if overridden
+const preferences = loadPreferences();
+if (preferences || process.env.COUNCIL_RESPONDERS || process.env.COUNCIL_EVALUATORS || process.env.COUNCIL_CHAIRMAN) {
+  console.log('Config overrides applied:');
+  if (process.env.COUNCIL_RESPONDERS) console.log('  COUNCIL_RESPONDERS (env)');
+  if (process.env.COUNCIL_EVALUATORS) console.log('  COUNCIL_EVALUATORS (env)');
+  if (process.env.COUNCIL_CHAIRMAN) console.log('  COUNCIL_CHAIRMAN (env)');
+  if (process.env.COUNCIL_TIMEOUT) console.log('  COUNCIL_TIMEOUT (env)');
+  if (preferences) console.log('  state/council-preferences.json');
+  console.log('');
+}
+
+runCouncil(prompt, effectiveConfig).catch((err) => {
   console.error('Council failed:', err);
   process.exit(1);
 });
