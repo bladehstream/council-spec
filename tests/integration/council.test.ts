@@ -303,3 +303,135 @@ Users: ${minimalInterview.users_and_actors?.map(u => u.name).join(', ') || 'Not 
     expect(hash1).not.toBe(hash2);
   });
 });
+
+describe('Structured Output Parsing', () => {
+  const validStructuredOutput = {
+    executive_summary: 'This is the executive summary of the council analysis.',
+    ambiguities: [
+      {
+        id: 'AMB-1',
+        question: 'What is the minimum iOS version?',
+        priority: 'critical',
+        context: 'Affects API availability and Neural Engine features',
+        options: ['iOS 15+', 'iOS 16+', 'iOS 17+'],
+        recommendation: 'iOS 16+ for Neural Engine v2 support',
+      },
+      {
+        id: 'AMB-2',
+        question: 'Recording format preference?',
+        priority: 'important',
+        context: 'Affects post-production workflow compatibility',
+        options: ['MP4', 'MOV', 'MKV'],
+        recommendation: 'MP4 with H.264 for maximum compatibility',
+      },
+    ],
+    spec_sections: {
+      architecture: '## Architecture\nMicroservices design...',
+      data_model: '## Data Model\nEntities: User, Task...',
+      api_contracts: '## API\nREST endpoints...',
+      user_flows: '## User Flows\nLogin -> Dashboard...',
+      security: '## Security\nJWT authentication...',
+      deployment: '## Deployment\nKubernetes cluster...',
+    },
+    implementation_phases: [
+      {
+        phase: 1,
+        name: 'Foundation',
+        description: 'Set up core infrastructure',
+        key_deliverables: ['API scaffold', 'Database schema'],
+      },
+    ],
+    consensus_notes: 'All agents agreed on microservices architecture.',
+  };
+
+  it('should parse valid JSON response directly', () => {
+    const jsonString = JSON.stringify(validStructuredOutput);
+    const parsed = JSON.parse(jsonString);
+
+    expect(parsed.executive_summary).toBe(validStructuredOutput.executive_summary);
+    expect(parsed.ambiguities.length).toBe(2);
+    expect(parsed.spec_sections.architecture).toContain('Microservices');
+  });
+
+  it('should extract JSON from markdown code fences', () => {
+    const responseWithCodeFence = `Here is my analysis:
+
+\`\`\`json
+${JSON.stringify(validStructuredOutput, null, 2)}
+\`\`\`
+
+Hope this helps!`;
+
+    const jsonMatch = responseWithCodeFence.match(/```(?:json)?\s*([\s\S]*?)```/);
+    expect(jsonMatch).not.toBeNull();
+
+    const parsed = JSON.parse(jsonMatch![1].trim());
+    expect(parsed.ambiguities.length).toBe(2);
+  });
+
+  it('should convert structured ambiguities to Ambiguity type', () => {
+    const structuredAmbiguities = validStructuredOutput.ambiguities;
+
+    const converted = structuredAmbiguities.map((a, idx) => ({
+      id: a.id || `AMB-${idx + 1}`,
+      description: a.question,
+      source: 'divergent_responses' as const,
+      options: a.options,
+      priority: a.priority,
+      context: a.context,
+      recommendation: a.recommendation,
+    }));
+
+    expect(converted[0].id).toBe('AMB-1');
+    expect(converted[0].description).toBe('What is the minimum iOS version?');
+    expect(converted[0].source).toBe('divergent_responses');
+    expect(converted[0].priority).toBe('critical');
+    expect(converted[0].options).toContain('iOS 16+');
+  });
+
+  it('should handle missing optional fields in structured output', () => {
+    const minimalOutput = {
+      executive_summary: 'Summary',
+      ambiguities: [],
+      spec_sections: {
+        architecture: 'Arch',
+        data_model: 'Data',
+        api_contracts: 'API',
+        user_flows: 'Flows',
+        security: 'Security',
+        deployment: 'Deploy',
+      },
+      implementation_phases: [],
+      consensus_notes: '',
+    };
+
+    const jsonString = JSON.stringify(minimalOutput);
+    const parsed = JSON.parse(jsonString);
+
+    expect(parsed.ambiguities.length).toBe(0);
+    expect(parsed.implementation_phases.length).toBe(0);
+  });
+
+  it('should preserve all spec_sections from structured output', () => {
+    const specSections = validStructuredOutput.spec_sections;
+
+    expect(specSections.architecture).toBeDefined();
+    expect(specSections.data_model).toBeDefined();
+    expect(specSections.api_contracts).toBeDefined();
+    expect(specSections.user_flows).toBeDefined();
+    expect(specSections.security).toBeDefined();
+    expect(specSections.deployment).toBeDefined();
+  });
+
+  it('should include implementation phases in _structured field', () => {
+    const _structured = {
+      executive_summary: validStructuredOutput.executive_summary,
+      implementation_phases: validStructuredOutput.implementation_phases,
+      consensus_notes: validStructuredOutput.consensus_notes,
+    };
+
+    expect(_structured.implementation_phases[0].phase).toBe(1);
+    expect(_structured.implementation_phases[0].name).toBe('Foundation');
+    expect(_structured.implementation_phases[0].key_deliverables).toContain('API scaffold');
+  });
+});

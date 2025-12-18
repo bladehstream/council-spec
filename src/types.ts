@@ -38,6 +38,12 @@ export interface Ambiguity {
   source: 'divergent_responses' | 'missing_info' | 'contradiction' | 'assumption';
   agents_involved?: string[];
   options?: string[];
+  /** Priority level from structured output */
+  priority?: 'critical' | 'important' | 'minor';
+  /** Additional context about why this matters */
+  context?: string;
+  /** Council's recommended resolution */
+  recommendation?: string;
   resolution?: {
     decision: string;
     rationale?: string;
@@ -77,6 +83,17 @@ export interface CouncilOutput {
     user_flows?: string;
     security?: string;
     deployment?: string;
+  };
+  /** Additional structured data from chairman output */
+  _structured?: {
+    executive_summary?: string;
+    implementation_phases?: Array<{
+      phase: number;
+      name: string;
+      description: string;
+      key_deliverables: string[];
+    }>;
+    consensus_notes?: string;
   };
 }
 

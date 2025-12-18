@@ -11,8 +11,83 @@ import {
   type PipelineResult,
   type EnhancedPipelineConfig,
 } from 'agent-council';
-import type { InterviewOutput, CouncilOutput, Config } from './types.js';
-import { formatList, extractAmbiguities, extractSpecSections } from './utils.js';
+import type { InterviewOutput, CouncilOutput, Config, Ambiguity } from './types.js';
+import { formatList } from './utils.js';
+
+/**
+ * Structured output format for the chairman.
+ * This instructs the chairman to output JSON that can be reliably parsed.
+ */
+const CHAIRMAN_OUTPUT_FORMAT = `You MUST output your response as a JSON object with this exact structure:
+
+{
+  "executive_summary": "2-3 paragraph synthesis of the council's analysis and key recommendations",
+  "ambiguities": [
+    {
+      "id": "AMB-1",
+      "question": "Clear question that needs human decision",
+      "priority": "critical" | "important" | "minor",
+      "context": "Why this matters and what it affects",
+      "options": ["Option A description", "Option B description"],
+      "recommendation": "Council's recommended choice with rationale"
+    }
+  ],
+  "spec_sections": {
+    "architecture": "Detailed architecture recommendations as markdown",
+    "data_model": "Data model design including entities, relationships, storage as markdown",
+    "api_contracts": "API specifications, endpoints, request/response formats as markdown",
+    "user_flows": "Critical user journeys and system interactions as markdown",
+    "security": "Security considerations, auth, encryption, compliance as markdown",
+    "deployment": "Infrastructure, scaling, monitoring recommendations as markdown"
+  },
+  "implementation_phases": [
+    {
+      "phase": 1,
+      "name": "Phase name",
+      "description": "What this phase accomplishes",
+      "key_deliverables": ["Deliverable 1", "Deliverable 2"]
+    }
+  ],
+  "consensus_notes": "Summary of areas where agents agreed/disagreed and how conflicts were resolved"
+}
+
+CRITICAL REQUIREMENTS:
+- Output ONLY the JSON object, no markdown code fences, no additional text
+- Every open question or ambiguity identified MUST appear in the ambiguities array
+- All spec_sections fields are REQUIRED - do not omit any
+- Priority must be exactly one of: "critical", "important", or "minor"
+- Include at least 2-4 implementation phases
+- The JSON must be valid and parseable`;
+
+/**
+ * Interface for the structured chairman output
+ */
+interface ChairmanStructuredOutput {
+  executive_summary: string;
+  ambiguities: Array<{
+    id: string;
+    question: string;
+    priority: 'critical' | 'important' | 'minor';
+    context: string;
+    options: string[];
+    recommendation: string;
+  }>;
+  spec_sections: {
+    architecture: string;
+    data_model: string;
+    api_contracts: string;
+    user_flows: string;
+    security: string;
+    deployment: string;
+  };
+  implementation_phases: Array<{
+    phase: number;
+    name: string;
+    description: string;
+    key_deliverables: string[];
+  }>;
+  consensus_notes: string;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -180,13 +255,14 @@ Starting council...
     const stage2Spec = parseStageSpec(config.council.evaluators, availableProviders, modelsConfig);
     const chairman = createAgentFromSpec(config.council.chairman);
 
-    // Build pipeline config
+    // Build pipeline config with structured output format
     const pipelineConfig: EnhancedPipelineConfig = {
       stage1: { agents: stage1Spec.agents },
       stage2: { agents: stage2Spec.agents },
       stage3: {
         chairman,
         useReasoning: false,
+        outputFormat: CHAIRMAN_OUTPUT_FORMAT,
       },
     };
 
@@ -213,6 +289,41 @@ Starting council...
       throw new Error('Council pipeline returned no results');
     }
 
+    // Parse the structured JSON output from chairman
+    let structuredOutput: ChairmanStructuredOutput;
+    const rawResponse = result.stage3.response;
+
+    try {
+      // Try to parse the JSON response directly
+      structuredOutput = JSON.parse(rawResponse);
+      console.log('\nSuccessfully parsed structured chairman output');
+    } catch (parseError) {
+      // Try to extract JSON from markdown code fences if direct parse fails
+      const jsonMatch = rawResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        try {
+          structuredOutput = JSON.parse(jsonMatch[1].trim());
+          console.log('\nExtracted JSON from markdown code fence');
+        } catch {
+          throw new Error(`Failed to parse chairman output as JSON: ${parseError}`);
+        }
+      } else {
+        throw new Error(`Chairman did not return valid JSON: ${parseError}`);
+      }
+    }
+
+    // Convert structured ambiguities to our Ambiguity type
+    const ambiguities: Ambiguity[] = structuredOutput.ambiguities.map((a, idx) => ({
+      id: a.id || `AMB-${idx + 1}`,
+      description: a.question,
+      source: 'divergent_responses' as const,
+      options: a.options,
+      // Store additional structured data
+      priority: a.priority,
+      context: a.context,
+      recommendation: a.recommendation,
+    }));
+
     const interview = loadInterview();
     const councilOutput: CouncilOutput = {
       input_hash: hashInterview(interview),
@@ -233,10 +344,16 @@ Starting council...
       },
       stage3: {
         chairman: result.stage3.agent,
-        synthesis: result.stage3.response,
+        synthesis: rawResponse,
       },
-      ambiguities: extractAmbiguities(result.stage3.response),
-      spec_sections: extractSpecSections(result.stage3.response),
+      ambiguities,
+      spec_sections: structuredOutput.spec_sections,
+      // Store additional structured data for downstream use
+      _structured: {
+        executive_summary: structuredOutput.executive_summary,
+        implementation_phases: structuredOutput.implementation_phases,
+        consensus_notes: structuredOutput.consensus_notes,
+      },
     };
 
     writeFileSync(
