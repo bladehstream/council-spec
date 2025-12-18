@@ -141,6 +141,19 @@ The interview output must match the schema in `src/types.ts`. Common issues:
 - `tech_stack` should be an array: `["React", "Node.js"]`
 - `priority` must be: `"must_have"`, `"should_have"`, or `"nice_to_have"`
 
+### Chairman parse errors
+
+If the council fails with "Chairman did not return valid JSON", debug files are saved to `state/debug/`:
+- `*_chairman-raw-response.txt` - Full chairman output (check for API errors)
+- `*_pipeline-result.json` - Summary of all stage responses
+
+Common causes:
+- **Timeout**: Increase `timeout_seconds` (default 420s may not be enough for heavy tiers)
+- **API error**: Check if the raw response starts with "Error from..."
+- **Context too long**: Use faster tiers for responders to reduce Stage 1 output size
+
+To disable verbose logging, set `DEBUG_LOGGING_ENABLED = false` in `src/council.ts`.
+
 ## Next Steps
 
 After generating your spec:

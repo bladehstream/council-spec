@@ -67,8 +67,8 @@ Or let them specify custom values:
 Write their preferences to `state/council-preferences.json`:
 ```json
 {
-  "responders": "3:heavy",
-  "evaluators": "3:heavy",
+  "responders": "3:default",
+  "evaluators": "3:default",
   "chairman": "claude:heavy",
   "timeout_seconds": 420
 }

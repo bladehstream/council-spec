@@ -146,8 +146,8 @@ If yes, explain the available options and write preferences to `state/council-pr
 
 ```json
 {
-  "responders": "3:heavy",
-  "evaluators": "3:heavy",
+  "responders": "3:default",
+  "evaluators": "3:default",
   "chairman": "claude:heavy",
   "timeout_seconds": 420
 }
@@ -160,10 +160,10 @@ If yes, explain the available options and write preferences to `state/council-pr
 
 **Environment Variables (highest priority):**
 ```bash
-COUNCIL_RESPONDERS=3:heavy npm run council
-COUNCIL_EVALUATORS=6:heavy npm run council
+COUNCIL_RESPONDERS=3:default npm run council
+COUNCIL_EVALUATORS=3:default npm run council
 COUNCIL_CHAIRMAN=claude:heavy npm run council
-COUNCIL_TIMEOUT=300 npm run council
+COUNCIL_TIMEOUT=420 npm run council
 ```
 
 **Priority order:**

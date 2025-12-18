@@ -96,8 +96,8 @@ Edit `config.json` to customize the council:
 ```json
 {
   "council": {
-    "responders": "3:heavy",
-    "evaluators": "3:heavy",
+    "responders": "3:default",
+    "evaluators": "3:default",
     "chairman": "claude:heavy",
     "timeout_seconds": 420
   }
