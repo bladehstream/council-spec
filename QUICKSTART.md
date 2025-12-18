@@ -121,7 +121,7 @@ Increase timeout in `config.json`:
 ```json
 {
   "council": {
-    "timeout_seconds": 300
+    "timeout_seconds": 420
   }
 }
 ```

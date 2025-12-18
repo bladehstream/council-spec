@@ -62,7 +62,7 @@ Or let them specify custom values:
 - Responders: count and tier (e.g., "3:heavy" or "claude:heavy,gemini:heavy")
 - Evaluators: count and tier
 - Chairman: provider:tier (e.g., "claude:heavy")
-- Timeout: seconds (default 180)
+- Timeout: seconds (default 420)
 
 Write their preferences to `state/council-preferences.json`:
 ```json
@@ -70,7 +70,7 @@ Write their preferences to `state/council-preferences.json`:
   "responders": "3:heavy",
   "evaluators": "3:heavy",
   "chairman": "claude:heavy",
-  "timeout_seconds": 300
+  "timeout_seconds": 420
 }
 ```
 

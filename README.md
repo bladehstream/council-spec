@@ -99,7 +99,7 @@ Edit `config.json` to customize the council:
     "responders": "3:heavy",
     "evaluators": "3:heavy",
     "chairman": "claude:heavy",
-    "timeout_seconds": 180
+    "timeout_seconds": 420
   }
 }
 ```

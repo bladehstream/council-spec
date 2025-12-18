@@ -149,7 +149,7 @@ If yes, explain the available options and write preferences to `state/council-pr
   "responders": "3:heavy",
   "evaluators": "3:heavy",
   "chairman": "claude:heavy",
-  "timeout_seconds": 300
+  "timeout_seconds": 420
 }
 ```
 
