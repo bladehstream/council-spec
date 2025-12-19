@@ -243,7 +243,7 @@ function getEffectiveCouncilConfig(config: Config): Config['council'] & { preset
 
       return {
         responders: process.env.COUNCIL_RESPONDERS || `${preset.stage1.count}:${preset.stage1.tier}`,
-        evaluators: process.env.COUNCIL_EVALUATORS || `${preset.stage2.count}:${preset.stage2.tier}`,
+        evaluators: process.env.COUNCIL_EVALUATORS || (preset.stage2 ? `${preset.stage2.count}:${preset.stage2.tier}` : '0:default'),
         chairman: process.env.COUNCIL_CHAIRMAN || defaultChairman,
         timeout_seconds: process.env.COUNCIL_TIMEOUT
           ? parseInt(process.env.COUNCIL_TIMEOUT, 10)
@@ -709,15 +709,18 @@ Starting council...
         agent: s.agent,
         response: s.response,
       })),
-      stage2: {
+      stage2: result.stage2 ? {
         rankings: result.stage2.map(s => ({
           agent: s.agent,
           ranking: s.parsedRanking,
         })),
-        aggregate: result.aggregate.map(a => ({
+        aggregate: result.aggregate?.map(a => ({
           agent: a.agent,
           score: a.averageRank,
-        })),
+        })) || [],
+      } : {
+        rankings: [],
+        aggregate: [],
       },
       stage3: {
         chairman: result.stage3.agent,

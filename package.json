@@ -7,9 +7,13 @@
   "scripts": {
     "build": "tsc",
     "council": "node dist/council.js",
+    "test-council": "node dist/test-council.js",
     "finalize": "node dist/finalize.js",
     "init": "node dist/init.js",
     "validate": "node dist/validate.js",
+    "export:spec": "node dist/export-spec.js",
+    "export:tests": "node dist/export-tests.js",
+    "export:all": "npm run export:spec && npm run export:tests",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",

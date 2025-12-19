@@ -1,6 +1,10 @@
 # Spec Workflow
 
-This project generates software specifications through AI-assisted requirements gathering and multi-agent consensus.
+This project generates complete software specifications and test plans through AI-assisted requirements gathering and multi-agent consensus.
+
+**Final Artifacts:**
+- `state/spec-final.json` + `state/spec-final.md` - Complete technical specification
+- `state/test-plan-output.json` + `state/test-plan.md` - Comprehensive test plan
 
 ## CRITICAL: Operating Constraints
 
@@ -9,16 +13,23 @@ This project generates software specifications through AI-assisted requirements 
 ### Allowed Actions
 - **Create/modify files in `state/`**:
   - `state/interview-output.json` - Interview results
-  - `state/council-output.json` - Council results (created by `npm run council`)
+  - `state/council-output.json` - Spec council results (created by `npm run council`)
   - `state/decisions.json` - Validation decisions (see schemas/decisions.json)
   - `state/spec-final.json` - Final specification (created by `npm run finalize`)
+  - `state/spec-final.md` - Human-readable spec (created by `npm run export:spec`)
+  - `state/test-plan-output.json` - Test plan (created by `npm run test-council`)
+  - `state/test-plan.md` - Human-readable test plan (created by `npm run export:tests`)
   - `state/council-preferences.json` - User's council configuration preferences
   - `state/conversations/*.log` - Conversation logs
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
-  - `npm run council` - Launch the agent council
+  - `npm run council` - Launch the spec council (compete mode)
   - `npm run validate [command]` - Validation helper (see below)
   - `npm run finalize` - Compile final specification from interview + council + decisions
+  - `npm run test-council` - Generate test plan from spec (merge mode)
+  - `npm run export:spec` - Export spec-final.json to markdown
+  - `npm run export:tests` - Export test-plan-output.json to markdown
+  - `npm run export:all` - Export both spec and test plan to markdown
 - **Read files** for context (config.json, prompts/workflow.md, existing state files)
 
 ### Prohibited Actions
@@ -46,7 +57,7 @@ Then start the workflow by interviewing the user.
 ### 1. Interview
 Follow `prompts/workflow.md`. Gather requirements conversationally, then write `state/interview-output.json`.
 
-### 2. Council
+### 2. Spec Council (Compete Mode)
 Run with a preset (see Runtime Configuration below for options):
 ```bash
 COUNCIL_PRESET=fast npm run council      # Quick iteration
@@ -56,10 +67,12 @@ COUNCIL_PRESET=thorough npm run council  # Maximum quality
 
 **Always use `COUNCIL_PRESET`** - this ensures two-pass chairman synthesis is configured correctly.
 
-This invokes agent-council with:
-- **Responders**: Stage 1 agents analyzing requirements
-- **Evaluators**: Stage 2 peer review agents ranking responses
-- **Chairman**: Two-pass synthesis (Pass 1: summary/ambiguities, Pass 2: detailed specs)
+This uses **compete mode** where responses are ranked to find the best specification:
+- **Stage 1 (Responders)**: Multiple agents analyze requirements independently
+- **Stage 2 (Evaluators)**: Peer review agents rank Stage 1 responses by quality
+- **Stage 3 (Chairman)**: Two-pass synthesis refines the top-ranked response
+  - Pass 1: Summary and ambiguity identification
+  - Pass 2: Detailed specification sections
 
 Output goes to `state/council-output.json`.
 
@@ -102,6 +115,35 @@ This compiles `state/spec-final.json` from:
 - `state/decisions.json` (human decisions)
 
 **Do NOT manually write spec-final.json** - always use the finalize command.
+
+### 5. Test Council (Merge Mode)
+Generate a comprehensive test plan from the finalized spec:
+```bash
+COUNCIL_PRESET=merge-fast npm run test-council      # Quick iteration
+COUNCIL_PRESET=merge-balanced npm run test-council  # Default quality
+COUNCIL_PRESET=merge-thorough npm run test-council  # Maximum quality
+```
+
+This uses **merge mode** where ALL responses are combined (not ranked):
+- **Stage 1 (Responders)**: Multiple agents generate test cases independently
+- **Stage 2**: Skipped - no ranking needed since all ideas are valuable
+- **Stage 3 (Chairman)**: Two-pass synthesis merges all unique test cases
+  - Pass 1: Categorize and deduplicate tests from all responders
+  - Pass 2: Refine into structured test plan with priorities
+
+**Why merge mode for tests?** Unlike specifications where we want the BEST approach, test plans benefit from diverse perspectives. Each model may identify unique edge cases, security concerns, or test scenarios that others miss.
+
+Output goes to `state/test-plan-output.json`.
+
+### 6. Export
+Generate human-readable markdown from the JSON artifacts:
+```bash
+npm run export:spec   # Creates state/spec-final.md
+npm run export:tests  # Creates state/test-plan.md
+npm run export:all    # Both
+```
+
+These are deterministic template-based conversions (no AI calls). Run after finalize and test-council to produce the final deliverables.
 
 ## Schemas
 
@@ -158,9 +200,16 @@ If yes, explain the available options and write preferences to `state/council-pr
 ```
 
 **Presets (from agent-council):**
+
+*Compete Mode (for Spec Council - `npm run council`):*
 - `fast` - 3:fast responders, 3:fast evaluators, default/default chairman (quick iteration)
 - `balanced` - 3:default responders, 3:default evaluators, heavy/default chairman (default)
 - `thorough` - 3:heavy responders, 6:heavy evaluators, heavy/heavy chairman (maximum quality)
+
+*Merge Mode (for Test Council - `npm run test-council`):*
+- `merge-fast` - 3:fast responders, no evaluators, default/default chairman (quick iteration)
+- `merge-balanced` - 3:default responders, no evaluators, heavy/default chairman (default)
+- `merge-thorough` - 3:heavy responders, no evaluators, heavy/heavy chairman (maximum quality)
 
 All presets use two-pass chairman synthesis for reliable large output generation.
 
@@ -198,8 +247,11 @@ ls -la state/
 ```
 
 - Only `interview-output.json` exists → Run `npm run council`
-- Both interview + council → Continue validation
-- All three files → Workflow complete
+- Interview + council exist → Continue validation, then `npm run finalize`
+- Interview + council + decisions exist → Run `npm run finalize`
+- spec-final.json exists → Run `npm run test-council`
+- spec-final.json + test-plan-output.json exist → Run `npm run export:all`
+- All JSON + markdown files exist → Workflow complete
 
 ## Conversation Logging
 
@@ -227,16 +279,17 @@ Their message
 [ASSISTANT]
 Your response
 
---- PHASE: COUNCIL ---
+--- PHASE: SPEC COUNCIL (compete mode) ---
 [TIMESTAMP]
 
 Config:
-  Responders: 3:heavy
-  Evaluators: 3:heavy
+  Preset: balanced
+  Responders: 3:default
+  Evaluators: 3:default
   Chairman: claude:heavy
 
 [TIMESTAMP]
-Council complete. Ambiguities found: 3
+Spec council complete. Ambiguities found: 3
 
 --- PHASE: VALIDATION ---
 [TIMESTAMP]
@@ -244,10 +297,36 @@ Council complete. Ambiguities found: 3
 [USER]
 ...
 
---- PHASE: COMPLETE ---
+--- PHASE: FINALIZE ---
 [TIMESTAMP]
 
 Final spec written to state/spec-final.json
+
+--- PHASE: TEST COUNCIL (merge mode) ---
+[TIMESTAMP]
+
+Config:
+  Preset: merge-balanced
+  Responders: 3:default
+  Chairman: claude:heavy
+
+[TIMESTAMP]
+Test council complete. Tests generated: 42
+
+--- PHASE: EXPORT ---
+[TIMESTAMP]
+
+Exported: state/spec-final.md (12.3 KB)
+Exported: state/test-plan.md (8.7 KB)
+
+--- PHASE: COMPLETE ---
+[TIMESTAMP]
+
+Workflow complete. Final artifacts:
+  - state/spec-final.json
+  - state/spec-final.md
+  - state/test-plan-output.json
+  - state/test-plan.md
 ```
 
 Conversation logs are **preserved** across `npm run init` - they provide a complete audit trail across multiple project iterations. If context resets, find the most recent log file and continue from where it left off.

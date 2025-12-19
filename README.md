@@ -1,10 +1,14 @@
 # Council Spec
 
-AI-powered software specification generation using multi-agent consensus.
+AI-powered software specification and test plan generation using multi-agent consensus.
 
 ## Overview
 
-Council Spec guides you through a structured process to transform project ideas into detailed technical specifications. It uses a multi-agent council (powered by [agent-council](https://github.com/bladehstream/agent-council)) to analyze requirements from multiple perspectives and synthesize comprehensive specs.
+Council Spec guides you through a structured process to transform project ideas into detailed technical specifications and comprehensive test plans. It uses a multi-agent council (powered by [agent-council](https://github.com/bladehstream/agent-council)) to analyze requirements from multiple perspectives.
+
+**Final Deliverables:**
+- `spec-final.json` + `spec-final.md` - Complete technical specification
+- `test-plan-output.json` + `test-plan.md` - Comprehensive test plan
 
 ## How It Works
 
@@ -16,14 +20,23 @@ Council Spec guides you through a structured process to transform project ideas 
 │  1. INTERVIEW        Gather requirements conversationally       │
 │        ↓             → state/interview-output.json              │
 │                                                                 │
-│  2. COUNCIL          Multi-agent analysis & two-pass synthesis  │
-│        ↓             → state/council-output.json                │
+│  2. SPEC COUNCIL     Multi-agent analysis (COMPETE mode)        │
+│        ↓             Agents ranked → best refined by chairman   │
+│                      → state/council-output.json                │
 │                                                                 │
 │  3. VALIDATION       Resolve ambiguities with human input       │
 │        ↓             → state/decisions.json                     │
 │                                                                 │
 │  4. FINALIZE         Compile final specification                │
-│                      → state/spec-final.json                    │
+│        ↓             → state/spec-final.json                    │
+│                                                                 │
+│  5. TEST COUNCIL     Generate test plan (MERGE mode)            │
+│        ↓             All agent ideas combined by chairman       │
+│                      → state/test-plan-output.json              │
+│                                                                 │
+│  6. EXPORT           Convert to human-readable markdown         │
+│                      → state/spec-final.md                      │
+│                      → state/test-plan.md                       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -38,15 +51,17 @@ An AI assistant interviews you about your project:
 - Integration points
 - Success criteria
 
-### Phase 2: Council
+### Phase 2: Spec Council (Compete Mode)
 
-Multiple AI agents independently analyze your requirements using a three-stage pipeline:
+Multiple AI agents independently analyze your requirements using **compete mode**:
 
 - **Stage 1**: Each agent (Claude, Gemini, Codex) produces their analysis
-- **Stage 2**: Agents peer-review and rank each other's responses
-- **Stage 3**: Two-pass chairman synthesis:
+- **Stage 2**: Agents peer-review and **rank** each other's responses
+- **Stage 3**: Two-pass chairman synthesis refines the **top-ranked** response:
   - **Pass 1**: Executive summary, ambiguities, consensus notes, implementation phases
   - **Pass 2**: Detailed specifications (architecture, data model, APIs, user flows, security, deployment)
+
+**Why compete mode?** For specifications, we want the BEST approach - ranking ensures quality rises to the top.
 
 ### Phase 3: Validation
 
@@ -62,6 +77,26 @@ All inputs are compiled into a comprehensive specification (~100KB+):
 - Security considerations
 - Deployment strategy
 - Validated decisions
+
+### Phase 5: Test Council (Merge Mode)
+
+Generate a comprehensive test plan using **merge mode**:
+
+- **Stage 1**: Each agent generates test cases independently
+- **Stage 2**: **Skipped** - no ranking needed
+- **Stage 3**: Two-pass chairman **merges ALL** unique test cases:
+  - **Pass 1**: Categorize and deduplicate tests from all responders
+  - **Pass 2**: Refine into structured test plan with priorities
+
+**Why merge mode?** For test plans, we want ALL ideas - each model identifies unique edge cases, security concerns, and scenarios that others miss.
+
+### Phase 6: Export
+
+Convert JSON artifacts to human-readable markdown:
+- `spec-final.json` → `spec-final.md`
+- `test-plan-output.json` → `test-plan.md`
+
+These are deterministic template-based conversions (no AI calls).
 
 ## Installation
 
@@ -92,7 +127,7 @@ See [QUICKSTART.md](QUICKSTART.md) for a complete walkthrough.
 # Initialize a new project
 npm run init my-project-name
 
-# Run the council phase with a preset (REQUIRED)
+# Run the spec council with a preset (compete mode)
 COUNCIL_PRESET=fast npm run council      # Quick iteration
 COUNCIL_PRESET=balanced npm run council  # Default quality (recommended)
 COUNCIL_PRESET=thorough npm run council  # Maximum quality
@@ -102,17 +137,41 @@ npm run validate status
 
 # Generate final spec
 npm run finalize
+
+# Generate test plan (merge mode)
+COUNCIL_PRESET=merge-fast npm run test-council
+COUNCIL_PRESET=merge-balanced npm run test-council  # Recommended
+COUNCIL_PRESET=merge-thorough npm run test-council
+
+# Export to markdown
+npm run export:spec   # Spec only
+npm run export:tests  # Test plan only
+npm run export:all    # Both
 ```
 
 ## Council Presets
 
-**Always use `COUNCIL_PRESET`** to run the council. This ensures two-pass chairman synthesis is properly configured.
+**Always use `COUNCIL_PRESET`** to run the councils. This ensures two-pass chairman synthesis is properly configured.
+
+### Spec Council Presets (Compete Mode)
+
+Use for `npm run council` - responses are ranked to find the best specification.
 
 | Preset | Stage 1 | Stage 2 | Chairman | Output Quality |
 |--------|---------|---------|----------|----------------|
 | `fast` | 3x fast | 3x fast | default/default | Outlines (fallback if Pass 2 fails) |
 | `balanced` | 3x default | 3x default | heavy/default | Full detailed specs |
 | `thorough` | 3x heavy | 6x heavy | heavy/heavy | Maximum detail |
+
+### Test Council Presets (Merge Mode)
+
+Use for `npm run test-council` - ALL responses combined for comprehensive coverage.
+
+| Preset | Stage 1 | Stage 2 | Chairman | Output Quality |
+|--------|---------|---------|----------|----------------|
+| `merge-fast` | 3x fast | *skipped* | default/default | Quick test ideas |
+| `merge-balanced` | 3x default | *skipped* | heavy/default | Comprehensive tests |
+| `merge-thorough` | 3x heavy | *skipped* | heavy/heavy | Maximum coverage |
 
 ### Two-Pass Chairman
 
@@ -163,21 +222,25 @@ The `config.json` provides defaults, but **presets override these**:
 ```
 council-spec/
 ├── src/
-│   ├── council.ts      # Council runner with two-pass support
-│   ├── finalize.ts     # Final spec compilation
-│   ├── validate.ts     # Validation helper
-│   ├── init.ts         # Project initialization
-│   ├── types.ts        # TypeScript interfaces
-│   └── utils.ts        # Utility functions
+│   ├── council.ts       # Spec council runner (compete mode)
+│   ├── test-council.ts  # Test council runner (merge mode)
+│   ├── finalize.ts      # Final spec compilation
+│   ├── export-spec.ts   # Spec JSON → markdown conversion
+│   ├── export-tests.ts  # Test plan JSON → markdown conversion
+│   ├── markdown-utils.ts # Shared markdown formatting utilities
+│   ├── validate.ts      # Validation helper
+│   ├── init.ts          # Project initialization
+│   ├── types.ts         # TypeScript interfaces
+│   └── utils.ts         # Utility functions
 ├── state/
-│   ├── conversations/  # Timestamped audit logs
-│   ├── checkpoints/    # Pipeline checkpoints for resumption
-│   └── *.json          # Workflow state files
-├── schemas/            # JSON schemas for state files
+│   ├── conversations/   # Timestamped audit logs
+│   ├── checkpoints/     # Pipeline checkpoints for resumption
+│   └── *.json, *.md     # Workflow state files
+├── schemas/             # JSON schemas for state files
 ├── prompts/
-│   └── workflow.md     # Interview & validation instructions
-├── config.json         # Council configuration
-├── CLAUDE.md           # AI assistant operating constraints
+│   └── workflow.md      # Interview & validation instructions
+├── config.json          # Council configuration
+├── CLAUDE.md            # AI assistant operating constraints
 └── README.md
 ```
 
@@ -186,9 +249,12 @@ council-spec/
 | File | Created By | Contents |
 |------|-----------|----------|
 | `interview-output.json` | Interview phase | Structured requirements |
-| `council-output.json` | Council phase | Multi-agent analysis + spec sections |
+| `council-output.json` | Spec Council phase | Multi-agent analysis + spec sections |
 | `decisions.json` | Validation phase | Human decisions on ambiguities |
 | `spec-final.json` | Finalize phase | Complete specification (~100KB) |
+| `spec-final.md` | Export phase | Human-readable specification |
+| `test-plan-output.json` | Test Council phase | Comprehensive test plan |
+| `test-plan.md` | Export phase | Human-readable test plan |
 
 ### Final Spec Structure
 
@@ -233,11 +299,19 @@ Contains all interview Q&A, council execution details, validation decisions, and
 ## Testing
 
 ```bash
-npm run test           # All tests
-npm run test:unit      # Unit tests only
-npm run test:smoke     # End-to-end smoke tests
+npm run test           # All tests (79 tests)
+npm run test:unit      # Unit tests (27 tests)
+npm run test:integration  # Integration tests (20 tests)
+npm run test:contract  # Contract tests (17 tests)
+npm run test:smoke     # End-to-end smoke tests (15 tests)
 npm run test:coverage  # With coverage report
 ```
+
+**Test Coverage:**
+- Unit tests: Utility functions, config loading, markdown formatting
+- Integration tests: Council module with mocked agent-council
+- Contract tests: Verify agent-council API exports and signatures
+- Smoke tests: End-to-end workflow verification
 
 ## Related Projects
 
