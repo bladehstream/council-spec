@@ -172,6 +172,10 @@ function compileExtendedSpec(
       parseMarkdownToStructure(council.spec_sections.architecture) : null,
     data_model: council.spec_sections?.data_model ?
       parseMarkdownToStructure(council.spec_sections.data_model) : null,
+    api_contracts: council.spec_sections?.api_contracts ?
+      parseMarkdownToStructure(council.spec_sections.api_contracts) : null,
+    user_flows: council.spec_sections?.user_flows ?
+      parseMarkdownToStructure(council.spec_sections.user_flows) : null,
     security: council.spec_sections?.security ?
       parseMarkdownToStructure(council.spec_sections.security) : null,
     deployment: council.spec_sections?.deployment ?
