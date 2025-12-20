@@ -12,14 +12,19 @@ import {
   parseSectionedOutput,
   getPreset,
   buildPipelineConfig,
+  callAgent,
   PASS1_SECTIONS,
   PASS2_SECTIONS,
   type PipelineResult,
   type EnhancedPipelineConfig,
   type CheckpointOptions,
   type AgentConfig,
+  type AgentState,
   type TwoPassConfig,
   type ParsedSection,
+  type Stage1Result,
+  type Stage2CustomResult,
+  type Stage2CustomHandler,
 } from 'agent-council';
 import type { InterviewOutput, CouncilOutput, Config, Ambiguity } from './types.js';
 import { formatList } from './utils.js';
@@ -465,6 +470,244 @@ function getChairmanFallbackChain(primarySpec: string): AgentConfig[] {
 }
 
 /**
+ * Section assignments for deduplication evaluators.
+ * Each evaluator handles 2 sections to balance load.
+ */
+const DEDUP_SECTION_ASSIGNMENTS = {
+  evaluator1: ['architecture', 'data_model'],
+  evaluator2: ['api_contracts', 'user_flows'],
+  evaluator3: ['security', 'deployment'],
+} as const;
+
+/**
+ * Build the prompt for a deduplication evaluator.
+ * The evaluator extracts and consolidates specific sections from all Stage 1 responses.
+ */
+function buildDedupPrompt(sections: readonly string[], stage1Responses: Stage1Result[]): string {
+  const sectionList = sections.map(s => `- ${s}`).join('\n');
+  const responsesText = stage1Responses.map((r, i) => {
+    return `### Agent ${i + 1} (${r.agent})\n\`\`\`json\n${r.response}\n\`\`\``;
+  }).join('\n\n');
+
+  return `You are a deduplication specialist. Your task is to consolidate the following sections from multiple agent responses into a single, comprehensive output.
+
+## Your Assigned Sections
+${sectionList}
+
+## Agent Responses
+${responsesText}
+
+## Instructions
+
+1. For each assigned section, extract the content from ALL agent responses
+2. Identify and merge unique insights - do NOT discard any valuable information
+3. Remove pure duplicates but preserve different perspectives on the same topic
+4. Flag any CONFLICTS where agents disagree (these need chairman resolution)
+5. Note unique insights that only one agent identified
+
+## Output Format
+
+Return a JSON object with this structure:
+
+\`\`\`json
+{
+  "sections": {
+    "${sections[0]}": "Consolidated content for ${sections[0]}...",
+    "${sections[1]}": "Consolidated content for ${sections[1]}..."
+  },
+  "conflicts": [
+    {
+      "topic": "Brief description of the conflicting topic",
+      "section": "Which section this affects",
+      "positions": [
+        {"agent": "agent1", "position": "Their stance"},
+        {"agent": "agent2", "position": "Their different stance"}
+      ]
+    }
+  ],
+  "unique_insights": [
+    {
+      "source": "Which agent",
+      "section": "Which section",
+      "insight": "The unique insight"
+    }
+  ]
+}
+\`\`\`
+
+IMPORTANT:
+- Output ONLY the JSON object, no additional text
+- Preserve technical details and specific recommendations
+- Keep the consolidated sections comprehensive but without redundancy
+- Flag ALL conflicts - don't try to resolve them yourself`;
+}
+
+/**
+ * Run a single deduplication evaluator agent.
+ */
+async function runDedupEvaluator(
+  agent: AgentConfig,
+  sections: readonly string[],
+  stage1Results: Stage1Result[],
+  timeoutMs: number
+): Promise<{ agent: string; sections: Record<string, string>; conflicts: any[]; uniqueInsights: any[]; raw: string }> {
+  const prompt = buildDedupPrompt(sections, stage1Results);
+
+  // Create agent state for callAgent
+  const state: AgentState = {
+    config: agent,
+    status: 'pending',
+    stdout: [],
+    stderr: [],
+  };
+
+  try {
+    // Use agent-council's callAgent to run the evaluator
+    const resultState = await callAgent(state, prompt, timeoutMs);
+
+    if (resultState.status === 'error' || resultState.status === 'timeout') {
+      console.error(`Dedup evaluator ${agent.name} ${resultState.status}:`, resultState.errorMessage);
+      return {
+        agent: agent.name,
+        sections: {},
+        conflicts: [],
+        uniqueInsights: [],
+        raw: `Error: ${resultState.errorMessage || resultState.status}`,
+      };
+    }
+
+    const result = resultState.stdout.join('');
+
+    // Parse the response
+    let parsed: any;
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = result.match(/```json\s*([\s\S]*?)\s*```/) || result.match(/\{[\s\S]*\}/);
+      const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : result;
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      // Return raw response if parsing fails
+      return {
+        agent: agent.name,
+        sections: {},
+        conflicts: [],
+        uniqueInsights: [],
+        raw: result,
+      };
+    }
+
+    return {
+      agent: agent.name,
+      sections: parsed.sections || {},
+      conflicts: parsed.conflicts || [],
+      uniqueInsights: parsed.unique_insights || [],
+      raw: result,
+    };
+  } catch (error) {
+    console.error(`Dedup evaluator ${agent.name} failed:`, error);
+    return {
+      agent: agent.name,
+      sections: {},
+      conflicts: [],
+      uniqueInsights: [],
+      raw: `Error: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Custom Stage 2 handler for sectioned deduplication.
+ * Runs 3 evaluator agents in parallel, each handling 2 sections.
+ * This reduces the load on the chairman by pre-consolidating content.
+ */
+function createSectionedDedupHandler(evaluatorSpec: string): Stage2CustomHandler {
+  return async (
+    stage1Results: Stage1Result[],
+    agents: AgentConfig[],
+    timeoutMs: number = 300000
+  ): Promise<Stage2CustomResult> => {
+    const modelsConfig = loadModelsConfig();
+    const availableProviders = listProviders(modelsConfig);
+
+    // Parse evaluator spec to get agents (e.g., "3:default" or "claude:default,gemini:default,codex:default")
+    const evalSpec = parseStageSpec(evaluatorSpec, availableProviders, modelsConfig);
+    const evaluators = evalSpec.agents.slice(0, 3); // Max 3 evaluators
+
+    // Ensure we have 3 evaluators
+    while (evaluators.length < 3) {
+      evaluators.push(evaluators[0]); // Duplicate first if needed
+    }
+
+    console.log('  Running sectioned deduplication:');
+    console.log(`    Evaluator 1 (${evaluators[0].name}): ${DEDUP_SECTION_ASSIGNMENTS.evaluator1.join(', ')}`);
+    console.log(`    Evaluator 2 (${evaluators[1].name}): ${DEDUP_SECTION_ASSIGNMENTS.evaluator2.join(', ')}`);
+    console.log(`    Evaluator 3 (${evaluators[2].name}): ${DEDUP_SECTION_ASSIGNMENTS.evaluator3.join(', ')}`);
+
+    // Run all evaluators in parallel
+    const [result1, result2, result3] = await Promise.all([
+      runDedupEvaluator(evaluators[0], DEDUP_SECTION_ASSIGNMENTS.evaluator1, stage1Results, timeoutMs),
+      runDedupEvaluator(evaluators[1], DEDUP_SECTION_ASSIGNMENTS.evaluator2, stage1Results, timeoutMs),
+      runDedupEvaluator(evaluators[2], DEDUP_SECTION_ASSIGNMENTS.evaluator3, stage1Results, timeoutMs),
+    ]);
+
+    // Merge all sections
+    const sections: Record<string, string> = {
+      ...result1.sections,
+      ...result2.sections,
+      ...result3.sections,
+    };
+
+    // Collect all conflicts
+    const conflicts = [
+      ...result1.conflicts,
+      ...result2.conflicts,
+      ...result3.conflicts,
+    ].map(c => ({
+      topic: c.topic,
+      positions: c.positions || [],
+      resolution: undefined, // Chairman will resolve
+    }));
+
+    // Collect unique insights
+    const uniqueInsights = [
+      ...result1.uniqueInsights,
+      ...result2.uniqueInsights,
+      ...result3.uniqueInsights,
+    ].map(u => ({
+      source: u.source,
+      insight: `[${u.section}] ${u.insight}`,
+    }));
+
+    return {
+      sections,
+      conflicts: conflicts.length > 0 ? conflicts : undefined,
+      uniqueInsights: uniqueInsights.length > 0 ? uniqueInsights : undefined,
+      rawOutputs: [
+        { agent: result1.agent, response: result1.raw },
+        { agent: result2.agent, response: result2.raw },
+        { agent: result3.agent, response: result3.raw },
+      ],
+    };
+  };
+}
+
+/**
+ * Check if sectioned deduplication is enabled.
+ * Controlled by COUNCIL_DEDUP env var or preset.
+ */
+function isDedupEnabled(): boolean {
+  return process.env.COUNCIL_DEDUP === 'true';
+}
+
+/**
+ * Get evaluator spec for deduplication.
+ * Defaults to "3:default" for balanced quality.
+ */
+function getDedupEvaluatorSpec(config: Config): string {
+  return process.env.COUNCIL_DEDUP_EVALUATORS || config.council.evaluators || '3:default';
+}
+
+/**
  * Get primary chairman for merge mode - defaults to gemini:heavy for largest context.
  * Can be overridden via environment or config.
  */
@@ -491,10 +734,17 @@ async function runCouncil(prompt: string, config: Config): Promise<void> {
   // Get merge-mode chairman (defaults to gemini:heavy for largest context)
   const mergeChairmanSpec = getMergeChairmanSpec(config.council.chairman);
 
+  const dedupEnabled = isDedupEnabled();
+  const dedupEvaluatorSpec = dedupEnabled ? getDedupEvaluatorSpec(config) : null;
+
   console.log('Starting council with configuration:');
   console.log(`  Mode: merge (combining all agent insights)`);
   console.log(`  Responders: ${config.council.responders}`);
-  console.log(`  Stage 2: SKIPPED (merge mode)`);
+  if (dedupEnabled) {
+    console.log(`  Stage 2: Sectioned deduplication (${dedupEvaluatorSpec})`);
+  } else {
+    console.log(`  Stage 2: SKIPPED (merge mode)`);
+  }
   console.log(`  Chairman: ${mergeChairmanSpec}`);
   console.log(`  Timeout: ${config.council.timeout_seconds}s`);
   console.log('');
@@ -506,7 +756,7 @@ async function runCouncil(prompt: string, config: Config): Promise<void> {
 Config:
   Mode: merge
   Responders: ${config.council.responders}
-  Stage 2: SKIPPED (merge mode)
+  Stage 2: ${dedupEnabled ? `Sectioned deduplication (${dedupEvaluatorSpec})` : 'SKIPPED (merge mode)'}
   Chairman: ${mergeChairmanSpec}
   Timeout: ${config.council.timeout_seconds}s
 
@@ -588,9 +838,13 @@ Starting council...
 
     // Build pipeline config with merge mode, two-pass chairman, fallback chain
     const pipelineConfig: EnhancedPipelineConfig = {
-      mode: 'merge',  // MERGE MODE: Combine all agent insights, skip Stage 2 ranking
+      mode: 'merge',  // MERGE MODE: Combine all agent insights
       stage1: { agents: stage1Spec.agents },
-      // Stage 2 is omitted - merge mode skips ranking entirely
+      // Stage 2: Optional custom handler for sectioned deduplication
+      stage2: dedupEnabled && dedupEvaluatorSpec ? {
+        agents: [], // Not used when customHandler is provided
+        customHandler: createSectionedDedupHandler(dedupEvaluatorSpec),
+      } : undefined,
       stage3: {
         chairman,
         useReasoning: false,

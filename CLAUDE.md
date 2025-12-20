@@ -69,12 +69,27 @@ COUNCIL_PRESET=merge-thorough npm run council  # Maximum quality
 
 This uses **merge mode** where ALL agent responses are combined for comprehensive specifications:
 - **Stage 1 (Responders)**: Multiple agents analyze requirements independently
-- **Stage 2**: Skipped - no ranking needed since all insights are valuable
+- **Stage 2**: Optional sectioned deduplication (see below) or skipped
 - **Stage 3 (Chairman)**: Two-pass synthesis merges all unique insights
   - Pass 1: Executive summary, ambiguities, consensus notes (gemini:heavy default for large context)
   - Pass 2: Detailed specification sections (architecture, data model, APIs, etc.)
 
 **Why merge mode for specs?** Unlike ranking (compete mode) which discards non-winning responses, merge mode preserves ALL unique insights from every agent. This produces more comprehensive specifications at the cost of requiring a chairman with a large context window.
+
+**Optional: Sectioned Deduplication (Phase 2)**
+
+For very large Stage 1 outputs that overwhelm the chairman, enable sectioned deduplication:
+
+```bash
+COUNCIL_DEDUP=true COUNCIL_PRESET=merge-balanced npm run council
+```
+
+This adds a custom Stage 2 that pre-consolidates content:
+- **Evaluator 1**: Architecture + Data Model
+- **Evaluator 2**: API Contracts + User Flows
+- **Evaluator 3**: Security + Deployment
+
+Each evaluator deduplicates their sections, flags conflicts, and notes unique insights. The chairman then receives consolidated input instead of raw Stage 1 responses.
 
 **Chairman defaults to `gemini:heavy`** for largest context window. Fallback chain: `gemini:heavy → codex:heavy → claude:heavy → fail`.
 
@@ -133,12 +148,14 @@ RESUME_STAGE1=true COUNCIL_CHAIRMAN=gemini:default npm run test-council
 
 This uses **merge mode** where ALL responses are combined (not ranked):
 - **Stage 1 (Responders)**: Multiple agents generate test cases independently
-- **Stage 2**: Skipped - no ranking needed since all ideas are valuable
+- **Stage 2**: Optional sectioned deduplication or skipped
 - **Stage 3 (Chairman)**: Two-pass synthesis merges all unique test cases
   - Pass 1: Categorize and deduplicate tests from all responders
   - Pass 2: Refine into structured test plan with priorities
 
 **Why merge mode for tests?** Unlike specifications where we want the BEST approach, test plans benefit from diverse perspectives. Each model may identify unique edge cases, security concerns, or test scenarios that others miss.
+
+Sectioned deduplication is also available for test council: `COUNCIL_DEDUP=true npm run test-council`
 
 Output goes to `state/test-plan-output.json`.
 
@@ -234,6 +251,11 @@ COUNCIL_PRESET=merge-fast COUNCIL_CHAIRMAN=claude:heavy npm run council
 # Granular chairman control (pass1tier/pass2tier)
 COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=gemini:heavy/default npm run council
 # Pass 1 uses heavy (synthesis), Pass 2 uses default (JSON formatting)
+
+# Enable sectioned deduplication (Phase 2)
+COUNCIL_DEDUP=true COUNCIL_PRESET=merge-balanced npm run council
+# Optionally specify evaluator tier
+COUNCIL_DEDUP=true COUNCIL_DEDUP_EVALUATORS=3:fast npm run council
 ```
 
 **Chairman Format:**
@@ -299,7 +321,7 @@ Config:
   Mode: merge
   Preset: merge-balanced
   Responders: 3:default
-  Stage 2: SKIPPED (merge mode)
+  Stage 2: SKIPPED (merge mode) | Sectioned deduplication (3:default)
   Chairman: gemini:heavy
   Fallback Chain: codex:heavy → claude:heavy → fail
 
