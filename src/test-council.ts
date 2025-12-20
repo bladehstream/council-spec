@@ -17,15 +17,256 @@ import {
   listProviders,
   loadModelsConfig,
   createAgentFromSpec,
+  parseStageSpec,
+  callAgent,
   type EnhancedPipelineConfig,
   type PipelineResult,
   type Stage1Result,
+  type AgentConfig,
+  type AgentState,
   type TwoPassConfig,
+  type Stage2CustomResult,
+  type Stage2CustomHandler,
 } from 'agent-council';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
 const STATE_DIR = join(ROOT, 'state');
+
+// ============================================================================
+// Sectioned Deduplication for Test Plans
+// ============================================================================
+
+/**
+ * Section assignments for test deduplication.
+ * Each evaluator handles two test categories to parallelize work.
+ */
+const TEST_DEDUP_SECTION_ASSIGNMENTS = {
+  evaluator1: ['unit', 'integration'],
+  evaluator2: ['e2e', 'security'],
+  evaluator3: ['performance', 'edge_cases'],
+} as const;
+
+/**
+ * Build the deduplication prompt for a test evaluator.
+ */
+function buildTestDedupPrompt(
+  sections: readonly string[],
+  stage1Responses: Stage1Result[]
+): string {
+  const responsesText = stage1Responses
+    .map((r, i) => `===RESPONSE FROM: ${r.agent}===\nMODEL: ${r.agent}\nRESPONSE_INDEX: ${i}\n\n${r.response}\n===END RESPONSE FROM: ${r.agent}===`)
+    .join('\n\n');
+
+  return `You are a test plan deduplication specialist focusing on: ${sections.join(', ')}.
+
+## Your Task
+
+Review the test plan responses from multiple AI models and consolidate the ${sections.join(' and ')} tests.
+
+## Input Responses
+
+${responsesText}
+
+## Instructions
+
+1. **Extract** all tests for your assigned categories: ${sections.join(', ')}
+2. **Deduplicate** similar or identical tests, keeping the most detailed version
+3. **Flag conflicts** where models disagree on approach, priority, or expected results
+4. **Note unique insights** - tests that only one model suggested
+
+## Output Format
+
+For each of your sections (${sections.join(', ')}), output:
+
+===SECTION:${sections[0]}===
+[List of deduplicated tests with attribution]
+- [MODEL: source] Test ID - Name: Description
+- [MODEL: source1, source2] Test ID - Name: Description (merged similar tests)
+
+===CONFLICTS:${sections[0]}===
+- Topic: What the conflict is about
+  - [MODEL: source1] Position 1
+  - [MODEL: source2] Position 2
+
+===UNIQUE_INSIGHTS:${sections[0]}===
+- [MODEL: source] Unique test or approach only this model suggested
+
+${sections.length > 1 ? `===SECTION:${sections[1]}===
+[Same format as above]
+
+===CONFLICTS:${sections[1]}===
+[Same format]
+
+===UNIQUE_INSIGHTS:${sections[1]}===
+[Same format]` : ''}
+
+Be thorough in deduplication but preserve ALL unique test ideas.`;
+}
+
+/**
+ * Run a single deduplication evaluator for assigned test sections.
+ */
+async function runTestDedupEvaluator(
+  evaluatorAgent: AgentConfig,
+  sections: readonly string[],
+  stage1Responses: Stage1Result[],
+  timeoutMs: number
+): Promise<{ agent: string; sections: string[]; response: string }> {
+  const prompt = buildTestDedupPrompt(sections, stage1Responses);
+
+  // Create initial AgentState with the agent config
+  const state: AgentState = {
+    config: evaluatorAgent,
+    status: 'pending',
+    stdout: [],
+    stderr: [],
+  };
+
+  const result = await callAgent(state, prompt, timeoutMs);
+
+  // Extract response from stdout
+  const response = result.stdout.join('\n');
+
+  return {
+    agent: evaluatorAgent.name,
+    sections: [...sections],
+    response,
+  };
+}
+
+/**
+ * Parse dedup evaluator response into structured format.
+ */
+function parseTestDedupResponse(response: string): {
+  sections: Record<string, string>;
+  conflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }>;
+  uniqueInsights: Array<{ source: string; insight: string }>;
+} {
+  const sections: Record<string, string> = {};
+  const conflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }> = [];
+  const uniqueInsights: Array<{ source: string; insight: string }> = [];
+
+  // Extract sections
+  const sectionPattern = /===SECTION:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
+  let match;
+  while ((match = sectionPattern.exec(response)) !== null) {
+    sections[match[1]] = match[2].trim();
+  }
+
+  // Extract conflicts
+  const conflictPattern = /===CONFLICTS:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
+  while ((match = conflictPattern.exec(response)) !== null) {
+    const conflictText = match[2].trim();
+    const topicPattern = /- Topic: ([^\n]+)\n((?:\s+- \[MODEL: [^\]]+\] [^\n]+\n?)+)/g;
+    let topicMatch;
+    while ((topicMatch = topicPattern.exec(conflictText)) !== null) {
+      const topic = topicMatch[1];
+      const positionsText = topicMatch[2];
+      const positions: Array<{ agent: string; position: string }> = [];
+      const posPattern = /\[MODEL: ([^\]]+)\] ([^\n]+)/g;
+      let posMatch;
+      while ((posMatch = posPattern.exec(positionsText)) !== null) {
+        positions.push({ agent: posMatch[1], position: posMatch[2] });
+      }
+      if (positions.length > 0) {
+        conflicts.push({ topic, positions });
+      }
+    }
+  }
+
+  // Extract unique insights
+  const insightPattern = /===UNIQUE_INSIGHTS:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
+  while ((match = insightPattern.exec(response)) !== null) {
+    const insightText = match[2].trim();
+    const itemPattern = /- \[MODEL: ([^\]]+)\] ([^\n]+)/g;
+    let itemMatch;
+    while ((itemMatch = itemPattern.exec(insightText)) !== null) {
+      uniqueInsights.push({ source: itemMatch[1], insight: itemMatch[2] });
+    }
+  }
+
+  return { sections, conflicts, uniqueInsights };
+}
+
+/**
+ * Create a sectioned deduplication handler for test plans.
+ */
+function createTestSectionedDedupHandler(
+  evaluatorSpec: string,
+  availableProviders: string[],
+  modelsConfig: ReturnType<typeof loadModelsConfig>,
+  timeoutMs: number
+): Stage2CustomHandler {
+  return async (stage1Results: Stage1Result[]): Promise<Stage2CustomResult> => {
+    console.log('');
+    console.log('  [Stage 2] Sectioned Test Deduplication');
+
+    // Parse evaluator spec (e.g., "3:default")
+    const evalSpec = parseStageSpec(evaluatorSpec, availableProviders, modelsConfig);
+    const agents = evalSpec.agents.slice(0, 3); // Max 3 evaluators
+
+    if (agents.length < 3) {
+      console.log(`    Warning: Need 3 evaluators, got ${agents.length}. Padding with defaults.`);
+      while (agents.length < 3) {
+        agents.push(createAgentFromSpec('claude:default'));
+      }
+    }
+
+    const assignments = Object.entries(TEST_DEDUP_SECTION_ASSIGNMENTS);
+
+    // Run all 3 evaluators in parallel
+    console.log(`    Running ${agents.length} evaluators in parallel...`);
+    const evalPromises = assignments.map(([_key, sections], i) =>
+      runTestDedupEvaluator(agents[i], sections, stage1Results, timeoutMs)
+    );
+
+    const evalResults = await Promise.all(evalPromises);
+
+    // Merge results
+    const mergedSections: Record<string, string> = {};
+    const allConflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }> = [];
+    const allUniqueInsights: Array<{ source: string; insight: string }> = [];
+
+    for (const result of evalResults) {
+      console.log(`    ${result.agent}: processed ${result.sections.join(', ')}`);
+      const parsed = parseTestDedupResponse(result.response);
+
+      Object.assign(mergedSections, parsed.sections);
+      allConflicts.push(...parsed.conflicts);
+      allUniqueInsights.push(...parsed.uniqueInsights);
+    }
+
+    // Calculate compression
+    const originalSize = stage1Results.reduce((sum, r) => sum + r.response.length, 0);
+    const dedupedSize = Object.values(mergedSections).reduce((sum, s) => sum + s.length, 0);
+    const compressionPct = ((1 - dedupedSize / originalSize) * 100).toFixed(1);
+
+    console.log(`    Deduplication complete: ${originalSize} → ${dedupedSize} chars (${compressionPct}% reduction)`);
+    console.log(`    Conflicts found: ${allConflicts.length}`);
+    console.log(`    Unique insights: ${allUniqueInsights.length}`);
+
+    return {
+      sections: mergedSections,
+      conflicts: allConflicts,
+      uniqueInsights: allUniqueInsights,
+    };
+  };
+}
+
+/**
+ * Check if test deduplication is enabled (default: true).
+ */
+function isTestDedupEnabled(): boolean {
+  return process.env.TEST_COUNCIL_SKIP_DEDUP !== 'true' && process.env.COUNCIL_SKIP_DEDUP !== 'true';
+}
+
+/**
+ * Get evaluator spec for test deduplication.
+ */
+function getTestDedupEvaluatorSpec(): string {
+  return process.env.TEST_COUNCIL_DEDUP_EVALUATORS || process.env.COUNCIL_DEDUP_EVALUATORS || '3:default';
+}
 
 // Extended spec type that matches actual spec-final.json structure
 interface ExtendedSpec {
@@ -614,6 +855,25 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
   const isHeavyPreset = presetName.includes('thorough') || presetName.includes('heavy');
   const timeoutMs = isHeavyPreset ? 1200000 : 600000; // 20 minutes for heavy, 10 for others
   console.log(`  Timeout: ${timeoutMs / 60000} minutes${isHeavyPreset ? ' (heavy preset)' : ''}`);
+
+  // Configure sectioned deduplication for test plans (enabled by default)
+  if (isTestDedupEnabled() && pipelineConfig.mode === 'merge') {
+    const evalSpec = getTestDedupEvaluatorSpec();
+    console.log(`  Stage 2: Sectioned deduplication (${evalSpec})`);
+
+    // Initialize stage2 with customHandler
+    pipelineConfig.stage2 = {
+      agents: [],
+      customHandler: createTestSectionedDedupHandler(
+        evalSpec,
+        availableProviders,
+        config,
+        timeoutMs
+      ),
+    };
+  } else if (!isTestDedupEnabled()) {
+    console.log('  Stage 2: Deduplication disabled (TEST_COUNCIL_SKIP_DEDUP=true)');
+  }
 
   // Check for resume mode - reuse existing Stage 1 and only run chairman
   const resumeStage1 = process.env.RESUME_STAGE1 === 'true';
