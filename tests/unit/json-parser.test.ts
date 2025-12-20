@@ -10,14 +10,27 @@ import {
 
 describe('json-parser', () => {
   describe('stripMarkdownFences', () => {
-    it('should strip ```json fence', () => {
+    it('should strip ```json fence with newlines', () => {
       const input = '```json\n{"key": "value"}\n```';
       expect(stripMarkdownFences(input)).toBe('{"key": "value"}');
     });
 
-    it('should strip plain ``` fence', () => {
+    it('should strip ```json fence without trailing newline', () => {
+      const input = '```json\n{"key": "value"}```';
+      expect(stripMarkdownFences(input)).toBe('{"key": "value"}');
+    });
+
+    it('should strip plain ``` fence with newlines', () => {
       const input = '```\n{"key": "value"}\n```';
       expect(stripMarkdownFences(input)).toBe('{"key": "value"}');
+    });
+
+    it('should handle complex JSON with newlines', () => {
+      const input = '```json\n{\n  "key": "value",\n  "nested": {\n    "x": 1\n  }\n}\n```';
+      const result = stripMarkdownFences(input);
+      expect(result.startsWith('{')).toBe(true);
+      expect(result.endsWith('}')).toBe(true);
+      expect(JSON.parse(result)).toEqual({ key: 'value', nested: { x: 1 } });
     });
 
     it('should handle input without fences', () => {

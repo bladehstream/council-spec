@@ -44,20 +44,27 @@ const KNOWN_SECTIONS = [
 
 /**
  * Step 1: Strip markdown code fences
+ * Handles: ```json\n...\n``` and ```\n...\n```
  */
 export function stripMarkdownFences(input: string): string {
   let result = input.trim();
 
-  // Remove opening fence
-  if (result.startsWith('```json')) {
-    result = result.slice(7);
+  // Remove opening fence with optional newline
+  if (result.startsWith('```json\n')) {
+    result = result.slice(8);  // Remove ```json\n (8 chars)
+  } else if (result.startsWith('```json')) {
+    result = result.slice(7);  // Remove ```json (7 chars)
+  } else if (result.startsWith('```\n')) {
+    result = result.slice(4);  // Remove ```\n (4 chars)
   } else if (result.startsWith('```')) {
-    result = result.slice(3);
+    result = result.slice(3);  // Remove ``` (3 chars)
   }
 
-  // Remove closing fence
-  if (result.endsWith('```')) {
-    result = result.slice(0, -3);
+  // Remove closing fence with optional newline
+  if (result.endsWith('\n```')) {
+    result = result.slice(0, -4);  // Remove \n``` (4 chars)
+  } else if (result.endsWith('```')) {
+    result = result.slice(0, -3);  // Remove ``` (3 chars)
   }
 
   return result.trim();
