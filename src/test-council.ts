@@ -371,6 +371,83 @@ async function main() {
 
   // Set output format for chairman with source attribution and atomicity analysis
   const modelsUsed = pipelineConfig.stage1.agents.map(a => a.name).join(', ');
+
+  // Configure two-pass prompts for test plan generation
+  // Pass 1: Merge and categorize tests from all responders
+  // Pass 2: Produce final structured JSON with attribution
+  if (pipelineConfig.stage3.twoPass) {
+    pipelineConfig.stage3.twoPass.pass1Format = `You are merging test plans from multiple AI models.
+Your task is to combine all tests into a single comprehensive list.
+
+The models providing tests are: ${modelsUsed}
+
+For each test, note which model(s) contributed it using this format:
+[MODEL: model_name] Test Name - Description
+
+Instructions:
+1. List ALL unique tests from all responses
+2. For duplicate/similar tests, keep ONE version and note ALL models that suggested it
+3. Group tests by category (unit, integration, e2e, security, performance, edge_cases)
+4. Identify any gaps - important test scenarios not covered by any model
+
+Output format (plain text, NOT JSON):
+
+## UNIT TESTS
+[MODEL: claude:heavy] Test Name - Brief description
+[MODEL: gemini:heavy, claude:heavy] Test Name - Brief description (similar tests merged)
+...
+
+## INTEGRATION TESTS
+...
+
+## E2E TESTS
+...
+
+## SECURITY TESTS
+...
+
+## PERFORMANCE TESTS
+...
+
+## EDGE CASE TESTS
+...
+
+## COVERAGE GAPS
+- Gap 1: Description of missing test scenario
+- Gap 2: ...
+
+## MERGE NOTES
+Brief notes on deduplication decisions made`;
+
+    pipelineConfig.stage3.twoPass.pass2Format = `Convert the merged test list from Pass 1 into structured JSON.
+
+CRITICAL: Output ONLY valid JSON, no markdown code fences, no additional text.
+
+The models used were: ${modelsUsed}
+
+For source attribution:
+- Extract model name from [MODEL: xxx] tags
+- If multiple models listed, use first as source.model, rest as source.merged_from
+- For tests you create to fill gaps, use source.model = "chairman" and source.created_by_chairman = true
+
+JSON structure:
+{
+  "tests": {
+    "unit": [{"id": "UNIT-001", "name": "...", "description": "...", "priority": "high|medium|low", "category": "...", "steps": ["..."], "expected_result": "...", "source": {"model": "...", "merged_from": ["..."]}}],
+    "integration": [...],
+    "e2e": [...],
+    "security": [...],
+    "performance": [...],
+    "edge_cases": [...]
+  },
+  "coverage_summary": {
+    "features_covered": ["..."],
+    "gaps_identified": ["..."]
+  },
+  "merge_notes": "..."
+}`;
+  }
+
   pipelineConfig.stage3.outputFormat = `Output the merged test plan as JSON. Combine all tests from all responses.
 Deduplicate similar tests, keeping the most detailed version.
 Include ALL unique test ideas from every response.
