@@ -46,17 +46,22 @@ Start a conversation with an AI assistant (e.g., Claude) in this project directo
 ### Step 3: Council Phase
 
 ```bash
-npm run council
+COUNCIL_PRESET=merge-balanced npm run council
 ```
 
-This runs the multi-agent council:
+This runs the multi-agent council in **merge mode**:
 1. **Stage 1**: Multiple agents analyze your requirements independently
-2. **Stage 2**: Agents peer-review each other's responses
-3. **Stage 3**: Chairman synthesizes the best insights
+2. **Stage 2**: Skipped - all insights are valuable in merge mode
+3. **Stage 3**: Chairman merges ALL unique insights from every agent
 
 **Output:** `state/spec-council-output.json`
 
 Progress is displayed in the terminal. Typical runtime: 2-5 minutes.
+
+**Presets:**
+- `merge-fast` - Quick iteration
+- `merge-balanced` - Default quality (recommended)
+- `merge-thorough` - Maximum detail
 
 ### Step 4: Validation Phase
 

@@ -23,7 +23,7 @@ This project generates complete software specifications and test plans through A
   - `state/conversations/*.log` - Conversation logs
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
-  - `npm run council` - Launch the spec council (compete mode)
+  - `npm run council` - Launch the spec council (merge mode)
   - `npm run validate [command]` - Validation helper (see below)
   - `npm run finalize` - Compile final specification from interview + council + decisions
   - `npm run test-council` - Generate test plan from spec (merge mode)
@@ -57,22 +57,26 @@ Then start the workflow by interviewing the user.
 ### 1. Interview
 Follow `prompts/workflow.md`. Gather requirements conversationally, then write `state/interview-output.json`.
 
-### 2. Spec Council (Compete Mode)
+### 2. Spec Council (Merge Mode)
 Run with a preset (see Runtime Configuration below for options):
 ```bash
-COUNCIL_PRESET=fast npm run council      # Quick iteration
-COUNCIL_PRESET=balanced npm run council  # Default quality
-COUNCIL_PRESET=thorough npm run council  # Maximum quality
+COUNCIL_PRESET=merge-fast npm run council      # Quick iteration
+COUNCIL_PRESET=merge-balanced npm run council  # Default quality
+COUNCIL_PRESET=merge-thorough npm run council  # Maximum quality
 ```
 
 **Always use `COUNCIL_PRESET`** - this ensures two-pass chairman synthesis is configured correctly.
 
-This uses **compete mode** where responses are ranked to find the best specification:
+This uses **merge mode** where ALL agent responses are combined for comprehensive specifications:
 - **Stage 1 (Responders)**: Multiple agents analyze requirements independently
-- **Stage 2 (Evaluators)**: Peer review agents rank Stage 1 responses by quality
-- **Stage 3 (Chairman)**: Two-pass synthesis refines the top-ranked response
-  - Pass 1: Summary and ambiguity identification
-  - Pass 2: Detailed specification sections
+- **Stage 2**: Skipped - no ranking needed since all insights are valuable
+- **Stage 3 (Chairman)**: Two-pass synthesis merges all unique insights
+  - Pass 1: Executive summary, ambiguities, consensus notes (gemini:heavy default for large context)
+  - Pass 2: Detailed specification sections (architecture, data model, APIs, etc.)
+
+**Why merge mode for specs?** Unlike ranking (compete mode) which discards non-winning responses, merge mode preserves ALL unique insights from every agent. This produces more comprehensive specifications at the cost of requiring a chairman with a large context window.
+
+**Chairman defaults to `gemini:heavy`** for largest context window. Fallback chain: `gemini:heavy → codex:heavy → claude:heavy → fail`.
 
 Output goes to `state/spec-council-output.json`.
 
@@ -165,27 +169,29 @@ Edit `config.json` to change:
 
 ### Council Config Examples
 ```json
-// Fast iteration
+// Fast iteration (merge mode - evaluators ignored)
 "council": {
   "responders": "3:fast",
-  "evaluators": "3:fast",
-  "chairman": "gemini:default"
+  "evaluators": "0:default",
+  "chairman": "gemini:heavy"
 }
 
-// Maximum quality
+// Maximum quality (merge mode)
 "council": {
   "responders": "3:heavy",
-  "evaluators": "6:heavy",
-  "chairman": "claude:heavy"
+  "evaluators": "0:default",
+  "chairman": "gemini:heavy"
 }
 
 // Explicit agent selection
 "council": {
   "responders": "claude:heavy,gemini:heavy,codex:heavy",
-  "evaluators": "claude:default,gemini:default",
-  "chairman": "claude:heavy"
+  "evaluators": "0:default",
+  "chairman": "gemini:heavy/default"
 }
 ```
+
+**Note:** In merge mode, evaluators are not used (Stage 2 is skipped). The `evaluators` config is ignored but kept for backward compatibility.
 
 ### Runtime Configuration
 
@@ -196,23 +202,19 @@ If yes, explain the available options and write preferences to `state/council-pr
 ```json
 {
   "responders": "3:default",
-  "evaluators": "3:default",
-  "chairman": "claude:heavy",
+  "chairman": "gemini:heavy",
   "timeout_seconds": 420
 }
 ```
 
 **Presets (from agent-council):**
 
-*Compete Mode (for Spec Council - `npm run council`):*
-- `fast` - 3:fast responders, 3:fast evaluators, default/default chairman (quick iteration)
-- `balanced` - 3:default responders, 3:default evaluators, heavy/default chairman (default)
-- `thorough` - 3:heavy responders, 6:heavy evaluators, heavy/heavy chairman (maximum quality)
-
-*Merge Mode (for Test Council - `npm run test-council`):*
+*Merge Mode (for both Spec Council and Test Council):*
 - `merge-fast` - 3:fast responders, no evaluators, default/fast chairman (quick iteration)
-- `merge-balanced` - 3:default responders, no evaluators, default/default chairman (default)
-- `merge-thorough` - 3:heavy responders, no evaluators, default/default chairman (maximum coverage)
+- `merge-balanced` - 3:default responders, no evaluators, heavy/default chairman (default)
+- `merge-thorough` - 3:heavy responders, no evaluators, heavy/heavy chairman (maximum quality)
+
+**Note:** Both spec council and test council now use merge mode to preserve all agent insights. The chairman defaults to `gemini:heavy` for largest context window.
 
 All presets use two-pass chairman synthesis for reliable large output generation.
 
@@ -221,16 +223,16 @@ All presets use two-pass chairman synthesis for reliable large output generation
 **IMPORTANT: Always use `COUNCIL_PRESET` to run the council.** This ensures two-pass chairman synthesis is properly configured. Individual env vars (COUNCIL_RESPONDERS, etc.) do NOT inherit two-pass config and will result in missing spec sections.
 
 ```bash
-# RECOMMENDED: Use a preset (inherits ALL settings including two-pass)
-COUNCIL_PRESET=fast npm run council      # Quick iteration
-COUNCIL_PRESET=balanced npm run council  # Default quality
-COUNCIL_PRESET=thorough npm run council  # Maximum quality
+# RECOMMENDED: Use a merge preset (inherits ALL settings including two-pass)
+COUNCIL_PRESET=merge-fast npm run council      # Quick iteration
+COUNCIL_PRESET=merge-balanced npm run council  # Default quality
+COUNCIL_PRESET=merge-thorough npm run council  # Maximum quality
 
 # Override specific parts while keeping preset base
-COUNCIL_PRESET=fast COUNCIL_CHAIRMAN=claude:heavy npm run council
+COUNCIL_PRESET=merge-fast COUNCIL_CHAIRMAN=claude:heavy npm run council
 
 # Granular chairman control (pass1tier/pass2tier)
-COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=claude:heavy/default npm run test-council
+COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=gemini:heavy/default npm run council
 # Pass 1 uses heavy (synthesis), Pass 2 uses default (JSON formatting)
 ```
 
@@ -240,8 +242,8 @@ COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=claude:heavy/default npm run test
 
 **DO NOT use individual env vars without COUNCIL_PRESET:**
 ```bash
-# BAD - loses two-pass config, Pass 2 sections will be missing!
-COUNCIL_RESPONDERS=3:fast COUNCIL_EVALUATORS=3:fast npm run council
+# BAD - loses two-pass config and merge mode settings!
+COUNCIL_RESPONDERS=3:fast npm run council
 ```
 
 **Priority order:**
@@ -290,17 +292,19 @@ Their message
 [ASSISTANT]
 Your response
 
---- PHASE: SPEC COUNCIL (compete mode) ---
+--- PHASE: SPEC COUNCIL (merge mode) ---
 [TIMESTAMP]
 
 Config:
-  Preset: balanced
+  Mode: merge
+  Preset: merge-balanced
   Responders: 3:default
-  Evaluators: 3:default
-  Chairman: claude:heavy
+  Stage 2: SKIPPED (merge mode)
+  Chairman: gemini:heavy
+  Fallback Chain: codex:heavy → claude:heavy → fail
 
 [TIMESTAMP]
-Spec council complete. Ambiguities found: 3
+Spec council complete (merge mode). Ambiguities found: 3
 
 --- PHASE: VALIDATION ---
 [TIMESTAMP]

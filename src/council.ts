@@ -442,44 +442,71 @@ function hashInterview(interview: InterviewOutput): string {
 }
 
 /**
- * Determine the fallback chairman based on the primary chairman's provider.
- * Fallback chain: claude→gemini, gemini→codex, codex→gemini
+ * Build the chairman fallback chain for merge mode spec synthesis.
+ * Fallback chain: gemini:heavy → codex:heavy → claude:heavy → fail loudly
+ *
+ * Large context windows are critical for merging multiple agent responses.
+ * - Gemini Pro: 2M context
+ * - Codex Max: Large context
+ * - Claude Opus: 200K context (smallest, last resort)
  */
-function getFallbackChairman(chairmanSpec: string): AgentConfig | undefined {
-  const { provider, tier } = parseAgentSpec(chairmanSpec);
+function getChairmanFallbackChain(primarySpec: string): AgentConfig[] {
+  const { provider } = parseAgentSpec(primarySpec);
 
-  const fallbackMap: Record<string, string> = {
-    claude: 'gemini',
-    gemini: 'codex',
-    codex: 'gemini',
-  };
+  // Full fallback chain prioritizing context window size
+  const fallbackOrder = ['gemini', 'codex', 'claude'];
 
-  const fallbackProvider = fallbackMap[provider];
-  if (!fallbackProvider) {
-    // Unknown provider, no fallback
-    return undefined;
+  // Remove the primary provider from fallback chain (it's already the primary)
+  const fallbackProviders = fallbackOrder.filter(p => p !== provider);
+
+  // All fallbacks use heavy tier for maximum context
+  return fallbackProviders.map(p => createAgentFromSpec(`${p}:heavy`));
+}
+
+/**
+ * Get primary chairman for merge mode - defaults to gemini:heavy for largest context.
+ * Can be overridden via environment or config.
+ */
+function getMergeChairmanSpec(configChairman: string): string {
+  // If explicitly set, use it; otherwise default to gemini:heavy for merge mode
+  if (process.env.COUNCIL_CHAIRMAN) {
+    return process.env.COUNCIL_CHAIRMAN;
   }
 
-  // Use the same tier for the fallback
-  return createAgentFromSpec(`${fallbackProvider}:${tier}`);
+  // For merge mode, default to gemini:heavy (largest context window)
+  // unless config explicitly specifies a different chairman
+  const { provider, tier } = parseAgentSpec(configChairman);
+
+  // If config specifies non-default tier, respect it
+  if (tier !== 'default') {
+    return configChairman;
+  }
+
+  // Default to gemini:heavy for merge mode
+  return 'gemini:heavy';
 }
 
 async function runCouncil(prompt: string, config: Config): Promise<void> {
+  // Get merge-mode chairman (defaults to gemini:heavy for largest context)
+  const mergeChairmanSpec = getMergeChairmanSpec(config.council.chairman);
+
   console.log('Starting council with configuration:');
+  console.log(`  Mode: merge (combining all agent insights)`);
   console.log(`  Responders: ${config.council.responders}`);
-  console.log(`  Evaluators: ${config.council.evaluators}`);
-  console.log(`  Chairman: ${config.council.chairman}`);
+  console.log(`  Stage 2: SKIPPED (merge mode)`);
+  console.log(`  Chairman: ${mergeChairmanSpec}`);
   console.log(`  Timeout: ${config.council.timeout_seconds}s`);
   console.log('');
 
   log(`
---- PHASE: COUNCIL ---
+--- PHASE: COUNCIL (merge mode) ---
 [${new Date().toISOString()}]
 
 Config:
+  Mode: merge
   Responders: ${config.council.responders}
-  Evaluators: ${config.council.evaluators}
-  Chairman: ${config.council.chairman}
+  Stage 2: SKIPPED (merge mode)
+  Chairman: ${mergeChairmanSpec}
   Timeout: ${config.council.timeout_seconds}s
 
 Starting council...
@@ -490,14 +517,15 @@ Starting council...
     const modelsConfig = loadModelsConfig();
     const availableProviders = listProviders(modelsConfig);
 
-    // Parse stage specs from config
+    // Parse stage specs from config - only Stage 1 is used in merge mode
     const stage1Spec = parseStageSpec(config.council.responders, availableProviders, modelsConfig);
-    const stage2Spec = parseStageSpec(config.council.evaluators, availableProviders, modelsConfig);
+    // Stage 2 is SKIPPED in merge mode - no ranking/evaluation needed
 
     // Parse chairman spec - supports granular format: provider:pass1tier/pass2tier
     // Examples: claude:heavy, gemini:heavy/default, claude:default/fast
-    let chairmanSpec = config.council.chairman;
-    let chairmanPass1Tier: 'fast' | 'default' | 'heavy' = 'default';
+    // For merge mode, defaults to gemini:heavy for largest context window
+    let chairmanSpec = mergeChairmanSpec;
+    let chairmanPass1Tier: 'fast' | 'default' | 'heavy' = 'heavy'; // Default to heavy for merge mode
     let chairmanPass2Tier: 'fast' | 'default' | 'heavy' = 'default';
     let hasGranularChairman = false;
 
@@ -506,7 +534,7 @@ Starting council...
       // Granular format: pass1tier/pass2tier
       hasGranularChairman = true;
       const [p1, p2] = tierPart.split('/');
-      chairmanPass1Tier = (p1 || 'default') as 'fast' | 'default' | 'heavy';
+      chairmanPass1Tier = (p1 || 'heavy') as 'fast' | 'default' | 'heavy';
       chairmanPass2Tier = (p2 || 'default') as 'fast' | 'default' | 'heavy';
       // Normalize spec for createAgentFromSpec (use pass1 tier)
       chairmanSpec = `${chairmanProvider}:${chairmanPass1Tier}`;
@@ -518,10 +546,14 @@ Starting council...
 
     const chairman = createAgentFromSpec(chairmanSpec);
 
-    // Build fallback chairman
-    const fallbackChairman = getFallbackChairman(chairmanSpec);
-    if (fallbackChairman) {
-      console.log(`  Fallback Chairman: ${fallbackChairman.name}`);
+    // Build fallback chain for merge mode: gemini:heavy → codex:heavy → claude:heavy → fail
+    const fallbackChain = getChairmanFallbackChain(chairmanSpec);
+    const primaryFallback = fallbackChain[0]; // First fallback for the pipeline config
+
+    if (fallbackChain.length > 0) {
+      console.log(`  Fallback Chain: ${fallbackChain.map(f => f.name).join(' → ')} → fail`);
+    } else {
+      console.log(`  Fallback Chain: none (all providers used as primary)`);
     }
 
     // Build two-pass configuration
@@ -553,14 +585,15 @@ Starting council...
       console.log(`  Two-Pass Mode: Pass 1 (${chairmanPass1Tier}) → Pass 2 (${pass2Tier})`);
     }
 
-    // Build pipeline config with two-pass chairman, fallback, and summaries
+    // Build pipeline config with merge mode, two-pass chairman, fallback chain
     const pipelineConfig: EnhancedPipelineConfig = {
+      mode: 'merge',  // MERGE MODE: Combine all agent insights, skip Stage 2 ranking
       stage1: { agents: stage1Spec.agents },
-      stage2: { agents: stage2Spec.agents },
+      // Stage 2 is omitted - merge mode skips ranking entirely
       stage3: {
         chairman,
         useReasoning: false,
-        fallback: fallbackChairman,
+        fallback: primaryFallback,  // First fallback in chain
         useSummaries: true,  // Use executive summaries to reduce chairman context
         twoPass: twoPassConfig,  // Enable two-pass synthesis
       },
@@ -595,19 +628,22 @@ Starting council...
           }
           // #endregion DEBUG_LOGGING
         },
+        // Stage 2 callback - not used in merge mode (no ranking)
         onStage2Complete: (rankings, aggregate) => {
-          console.log(`\nStage 2 complete: ${rankings.length} rankings`);
-          // #region DEBUG_LOGGING - verbose stage 2 logging
-          if (DEBUG_LOGGING_ENABLED) {
-            rankings.forEach((r, i) => {
-              console.log(`  [${i + 1}] ${r.agent}: ranked ${r.parsedRanking?.join(' > ') || 'parse failed'}`);
-              debugLog(`Stage 2 ranking ${i + 1} (${r.agent}): ${r.parsedRanking?.join(' > ') || 'PARSE FAILED'}`);
-            });
-            if (aggregate) {
-              console.log(`  Aggregate scores: ${aggregate.map(a => `${a.agent}=${a.averageRank.toFixed(2)}`).join(', ')}`);
+          // This callback won't be invoked in merge mode
+          // Kept for backward compatibility if mode is changed
+          if (rankings && rankings.length > 0) {
+            console.log(`\nStage 2 complete: ${rankings.length} rankings`);
+            if (DEBUG_LOGGING_ENABLED) {
+              rankings.forEach((r, i) => {
+                console.log(`  [${i + 1}] ${r.agent}: ranked ${r.parsedRanking?.join(' > ') || 'parse failed'}`);
+                debugLog(`Stage 2 ranking ${i + 1} (${r.agent}): ${r.parsedRanking?.join(' > ') || 'PARSE FAILED'}`);
+              });
+              if (aggregate) {
+                console.log(`  Aggregate scores: ${aggregate.map(a => `${a.agent}=${a.averageRank.toFixed(2)}`).join(', ')}`);
+              }
             }
           }
-          // #endregion DEBUG_LOGGING
         },
         onStage3Complete: (synthesis) => {
           const size = synthesis?.response?.length || 0;
@@ -736,10 +772,12 @@ Starting council...
     const councilOutput: CouncilOutput = {
       input_hash: hashInterview(interview),
       timestamp: new Date().toISOString(),
+      mode: 'merge',  // Record the mode used
       stage1: result.stage1.map(s => ({
         agent: s.agent,
         response: s.response,
       })),
+      // Stage 2 is skipped in merge mode - no rankings
       stage2: result.stage2 ? {
         rankings: result.stage2.map(s => ({
           agent: s.agent,
@@ -749,10 +787,7 @@ Starting council...
           agent: a.agent,
           score: a.averageRank,
         })) || [],
-      } : {
-        rankings: [],
-        aggregate: [],
-      },
+      } : null,  // Explicitly null in merge mode
       stage3: {
         chairman: result.stage3.agent,
         synthesis: rawResponse,
@@ -773,7 +808,7 @@ Starting council...
     );
 
     log(`[${new Date().toISOString()}]
-Council complete.
+Council complete (merge mode).
 Agents used: ${councilOutput.stage1.map(s => s.agent).join(', ') || 'N/A'}
 Ambiguities found: ${councilOutput.ambiguities.length}
 Output written to state/spec-council-output.json

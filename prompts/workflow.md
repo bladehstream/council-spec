@@ -51,25 +51,25 @@ Before completing the interview, ask:
 
 > "Would you like to customize the council structure?"
 
-If **no**, use defaults (balanced preset: 3:default responders/evaluators, heavy chairman).
+If **no**, use defaults (merge-balanced preset: 3:default responders, gemini:heavy chairman).
 
 If **yes**, explain the options:
-- **fast** - Quick iteration (3:fast responders/evaluators, default chairman)
-- **balanced** - Default (3:default responders/evaluators, heavy chairman)
-- **thorough** - Maximum quality (3:heavy responders, 6:heavy evaluators, heavy chairman)
+- **merge-fast** - Quick iteration (3:fast responders, default/fast chairman)
+- **merge-balanced** - Default (3:default responders, heavy/default chairman)
+- **merge-thorough** - Maximum quality (3:heavy responders, heavy/heavy chairman)
 
 Or let them specify custom values:
 - Responders: count and tier (e.g., "3:heavy" or "claude:heavy,gemini:heavy")
-- Evaluators: count and tier
-- Chairman: provider:tier (e.g., "claude:heavy")
+- Chairman: provider:tier or provider:pass1tier/pass2tier (e.g., "gemini:heavy/default")
 - Timeout: seconds (default 420)
+
+**Note:** The council uses merge mode where ALL agent responses are combined. Stage 2 (evaluators) is skipped. The chairman defaults to `gemini:heavy` for the largest context window.
 
 Write their preferences to `state/council-preferences.json`:
 ```json
 {
   "responders": "3:default",
-  "evaluators": "3:default",
-  "chairman": "claude:heavy",
+  "chairman": "gemini:heavy",
   "timeout_seconds": 420
 }
 ```

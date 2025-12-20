@@ -92,25 +92,20 @@ describe('Council Integration', () => {
   });
 
   describe('Pipeline Execution', () => {
-    it('should execute pipeline with correct config structure', async () => {
+    it('should execute pipeline in merge mode (no Stage 2 ranking)', async () => {
+      // Merge mode: Stage 2 is null (skipped), all agent insights are combined
       const mockResult = {
+        mode: 'merge',
         stage1: [
           { agent: 'claude:default', response: 'Response 1' },
           { agent: 'gemini:default', response: 'Response 2' },
           { agent: 'codex:default', response: 'Response 3' },
         ],
-        stage2: [
-          { agent: 'claude:default', parsedRanking: ['gemini', 'claude', 'codex'] },
-          { agent: 'gemini:default', parsedRanking: ['claude', 'gemini', 'codex'] },
-        ],
-        aggregate: [
-          { agent: 'claude:default', averageRank: 1.5 },
-          { agent: 'gemini:default', averageRank: 1.5 },
-          { agent: 'codex:default', averageRank: 3 },
-        ],
+        stage2: null,  // Merge mode skips Stage 2
+        aggregate: null,
         stage3: {
-          agent: 'claude:heavy',
-          response: 'Synthesized response with Architecture: microservices',
+          agent: 'gemini:heavy',  // Default chairman for merge mode
+          response: 'Merged synthesis with Architecture: microservices',
         },
       };
 
@@ -118,8 +113,9 @@ describe('Council Integration', () => {
 
       const result = await mockRunEnhancedPipeline('test prompt', {
         config: {
+          mode: 'merge',  // Merge mode
           stage1: { agents: [] },
-          stage2: { agents: [] },
+          // stage2 omitted in merge mode
           stage3: { chairman: {}, useReasoning: false },
         },
         timeoutMs: 180000,
@@ -128,8 +124,9 @@ describe('Council Integration', () => {
       });
 
       expect(result).toEqual(mockResult);
+      expect(result.mode).toBe('merge');
       expect(result.stage1.length).toBe(3);
-      expect(result.stage2.length).toBe(2);
+      expect(result.stage2).toBeNull();  // Stage 2 skipped in merge mode
       expect(result.stage3.response).toContain('Architecture');
     });
 
@@ -170,7 +167,30 @@ describe('Council Integration', () => {
       ]);
     });
 
-    it('should map stage2 rankings correctly', () => {
+    it('should handle null stage2 in merge mode', () => {
+      // In merge mode, stage2 is null (no ranking)
+      const result = {
+        stage1: [{ agent: 'claude', response: 'Response' }],
+        stage2: null,
+        stage3: { agent: 'gemini:heavy', response: 'Merged' },
+      };
+
+      // CouncilOutput mapping should handle null stage2
+      const councilOutput = {
+        stage2: result.stage2 ? {
+          rankings: result.stage2.map((s: any) => ({
+            agent: s.agent,
+            ranking: s.parsedRanking,
+          })),
+          aggregate: [],
+        } : null,
+      };
+
+      expect(councilOutput.stage2).toBeNull();
+    });
+
+    it('should map stage2 rankings correctly (compete mode fallback)', () => {
+      // This test covers backward compatibility if compete mode is ever used
       const stage2Results = [
         { agent: 'claude:default', parsedRanking: ['a', 'b', 'c'] },
         { agent: 'gemini:default', parsedRanking: ['b', 'a', 'c'] },
@@ -185,7 +205,8 @@ describe('Council Integration', () => {
       expect(mapped[1].ranking).toEqual(['b', 'a', 'c']);
     });
 
-    it('should compute aggregate scores correctly', () => {
+    it('should compute aggregate scores correctly (compete mode fallback)', () => {
+      // This test covers backward compatibility if compete mode is ever used
       const aggregateResults = [
         { agent: 'a', averageRank: 1.5 },
         { agent: 'b', averageRank: 2.0 },
@@ -200,6 +221,57 @@ describe('Council Integration', () => {
       expect(mapped[0].score).toBe(1.5);
       expect(mapped[1].score).toBe(2.0);
       expect(mapped[2].score).toBe(2.5);
+    });
+  });
+
+  describe('Chairman Fallback Chain', () => {
+    it('should build fallback chain prioritizing context window size', () => {
+      // Fallback chain: gemini:heavy → codex:heavy → claude:heavy → fail
+      const primaryChairman = 'gemini:heavy';
+
+      // Simulate getChairmanFallbackChain logic
+      const fallbackOrder = ['gemini', 'codex', 'claude'];
+      const [provider] = primaryChairman.split(':');
+      const fallbackProviders = fallbackOrder.filter(p => p !== provider);
+
+      expect(fallbackProviders).toEqual(['codex', 'claude']);
+    });
+
+    it('should exclude primary provider from fallback chain', () => {
+      const testCases = [
+        { primary: 'gemini:heavy', expectedFallbacks: ['codex', 'claude'] },
+        { primary: 'claude:heavy', expectedFallbacks: ['gemini', 'codex'] },
+        { primary: 'codex:heavy', expectedFallbacks: ['gemini', 'claude'] },
+      ];
+
+      const fallbackOrder = ['gemini', 'codex', 'claude'];
+
+      for (const { primary, expectedFallbacks } of testCases) {
+        const [provider] = primary.split(':');
+        const fallbackProviders = fallbackOrder.filter(p => p !== provider);
+        expect(fallbackProviders).toEqual(expectedFallbacks);
+      }
+    });
+
+    it('should default to gemini:heavy for merge mode chairman', () => {
+      // getMergeChairmanSpec defaults to gemini:heavy for largest context
+      const defaultConfig = 'claude:default';
+
+      // Simulate getMergeChairmanSpec logic
+      const [, tier] = defaultConfig.split(':');
+      const mergeDefault = tier !== 'default' ? defaultConfig : 'gemini:heavy';
+
+      expect(mergeDefault).toBe('gemini:heavy');
+    });
+
+    it('should respect explicit tier override', () => {
+      const explicitConfig = 'claude:heavy';
+
+      // Simulate getMergeChairmanSpec logic
+      const [, tier] = explicitConfig.split(':');
+      const mergeDefault = tier !== 'default' ? explicitConfig : 'gemini:heavy';
+
+      expect(mergeDefault).toBe('claude:heavy');
     });
   });
 });

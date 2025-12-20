@@ -20,8 +20,8 @@ Council Spec guides you through a structured process to transform project ideas 
 │  1. INTERVIEW        Gather requirements conversationally       │
 │        ↓             → state/interview-output.json              │
 │                                                                 │
-│  2. SPEC COUNCIL     Multi-agent analysis (COMPETE mode)        │
-│        ↓             Agents ranked → best refined by chairman   │
+│  2. SPEC COUNCIL     Multi-agent analysis (MERGE mode)          │
+│        ↓             All agent insights combined by chairman    │
 │                      → state/spec-council-output.json           │
 │                                                                 │
 │  3. VALIDATION       Resolve ambiguities with human input       │
@@ -51,17 +51,17 @@ An AI assistant interviews you about your project:
 - Integration points
 - Success criteria
 
-### Phase 2: Spec Council (Compete Mode)
+### Phase 2: Spec Council (Merge Mode)
 
-Multiple AI agents independently analyze your requirements using **compete mode**:
+Multiple AI agents independently analyze your requirements using **merge mode**:
 
 - **Stage 1**: Each agent (Claude, Gemini, Codex) produces their analysis
-- **Stage 2**: Agents peer-review and **rank** each other's responses
-- **Stage 3**: Two-pass chairman synthesis refines the **top-ranked** response:
+- **Stage 2**: **Skipped** - no ranking needed since all insights are valuable
+- **Stage 3**: Two-pass chairman synthesis **merges ALL** unique insights:
   - **Pass 1**: Executive summary, ambiguities, consensus notes, implementation phases
   - **Pass 2**: Detailed specifications (architecture, data model, APIs, user flows, security, deployment)
 
-**Why compete mode?** For specifications, we want the BEST approach - ranking ensures quality rises to the top.
+**Why merge mode?** For specifications, we want ALL perspectives - each agent may identify architectural considerations, edge cases, or requirements that others miss.
 
 ### Phase 3: Validation
 
@@ -127,10 +127,10 @@ See [QUICKSTART.md](QUICKSTART.md) for a complete walkthrough.
 # Initialize a new project
 npm run init my-project-name
 
-# Run the spec council with a preset (compete mode)
-COUNCIL_PRESET=fast npm run council      # Quick iteration
-COUNCIL_PRESET=balanced npm run council  # Default quality (recommended)
-COUNCIL_PRESET=thorough npm run council  # Maximum quality
+# Run the spec council with a preset (merge mode)
+COUNCIL_PRESET=merge-fast npm run council      # Quick iteration
+COUNCIL_PRESET=merge-balanced npm run council  # Default quality (recommended)
+COUNCIL_PRESET=merge-thorough npm run council  # Maximum quality
 
 # Validate decisions
 npm run validate status
@@ -153,15 +153,15 @@ npm run export:all    # Both
 
 **Always use `COUNCIL_PRESET`** to run the councils. This ensures two-pass chairman synthesis is properly configured.
 
-### Spec Council Presets (Compete Mode)
+### Spec Council Presets (Merge Mode)
 
-Use for `npm run council` - responses are ranked to find the best specification.
+Use for `npm run council` - ALL responses combined for comprehensive specifications.
 
 | Preset | Stage 1 | Stage 2 | Chairman | Output Quality |
 |--------|---------|---------|----------|----------------|
-| `fast` | 3x fast | 3x fast | default/default | Outlines (fallback if Pass 2 fails) |
-| `balanced` | 3x default | 3x default | heavy/default | Full detailed specs |
-| `thorough` | 3x heavy | 6x heavy | heavy/heavy | Maximum detail |
+| `merge-fast` | 3x fast | *skipped* | default/fast | Outlines (fallback if Pass 2 fails) |
+| `merge-balanced` | 3x default | *skipped* | heavy/default | Full detailed specs |
+| `merge-thorough` | 3x heavy | *skipped* | heavy/heavy | Maximum detail |
 
 ### Test Council Presets (Merge Mode)
 
@@ -211,12 +211,13 @@ The `config.json` provides defaults, but **presets override these**:
 {
   "council": {
     "responders": "3:default",
-    "evaluators": "3:default",
-    "chairman": "claude:heavy",
+    "chairman": "gemini:heavy",
     "timeout_seconds": 420
   }
 }
 ```
+
+**Note:** The chairman defaults to `gemini:heavy` for largest context window (2M tokens). Fallback chain: `gemini:heavy` → `codex:heavy` → `claude:heavy`.
 
 ### Agent Tiers
 
@@ -231,7 +232,7 @@ The `config.json` provides defaults, but **presets override these**:
 ```
 council-spec/
 ├── src/
-│   ├── council.ts       # Spec council runner (compete mode)
+│   ├── council.ts       # Spec council runner (merge mode)
 │   ├── test-council.ts  # Test council runner (merge mode)
 │   ├── finalize.ts      # Final spec compilation
 │   ├── export-spec.ts   # Spec JSON → markdown conversion

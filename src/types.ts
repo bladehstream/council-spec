@@ -54,12 +54,15 @@ export interface Ambiguity {
 export interface CouncilOutput {
   input_hash: string;
   timestamp: string;
+  /** Pipeline mode: 'compete' (rank responses) or 'merge' (combine all insights) */
+  mode?: 'compete' | 'merge';
   stage1: Array<{
     agent: string;
     model?: string;
     response: string;
     focus_areas?: string[];
   }>;
+  /** Stage 2 rankings - null in merge mode (no ranking occurs) */
   stage2: {
     rankings: Array<{
       agent: string;
@@ -69,7 +72,7 @@ export interface CouncilOutput {
       agent: string;
       score: number;
     }>;
-  };
+  } | null;
   stage3: {
     chairman: string;
     model?: string;
