@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
   runEnhancedPipeline,
+  runTwoPassMergeChairman,
   getPreset,
   buildPipelineConfig,
   listProviders,
@@ -18,6 +19,8 @@ import {
   createAgentFromSpec,
   type EnhancedPipelineConfig,
   type PipelineResult,
+  type Stage1Result,
+  type TwoPassConfig,
 } from 'agent-council';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -612,38 +615,112 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
   const timeoutMs = isHeavyPreset ? 1200000 : 600000; // 20 minutes for heavy, 10 for others
   console.log(`  Timeout: ${timeoutMs / 60000} minutes${isHeavyPreset ? ' (heavy preset)' : ''}`);
 
-  // Run the pipeline
-  const result = await runEnhancedPipeline(testPrompt, {
-    config: pipelineConfig,
-    timeoutMs,
-    tty: process.stdout.isTTY ?? false,
-    silent: false,
-    callbacks: {
-      onStage1Complete: (results) => {
-        console.log(`\nStage 1 complete: ${results.length} responses`);
-        log(`Stage 1 complete: ${results.length} responses`);
+  // Check for resume mode - reuse existing Stage 1 and only run chairman
+  const resumeStage1 = process.env.RESUME_STAGE1 === 'true';
+  const stage1Path = join(STATE_DIR, 'test-council-stage1.json');
 
-        // Save Stage 1 responses for recovery if chairman fails
-        const stage1Output = {
-          timestamp: new Date().toISOString(),
-          preset: presetName,
-          responses: results.map(r => ({
-            agent: r.agent,
-            response_length: r.response.length,
-            response: r.response,
-            summary: r.summary,
-          })),
-        };
-        const stage1Path = join(STATE_DIR, 'test-council-stage1.json');
-        writeFileSync(stage1Path, JSON.stringify(stage1Output, null, 2));
-        console.log(`  Stage 1 responses saved to: state/test-council-stage1.json`);
+  let result: PipelineResult | null;
+
+  if (resumeStage1 && existsSync(stage1Path)) {
+    console.log('');
+    console.log('RESUME MODE: Loading existing Stage 1 responses...');
+
+    // Load saved Stage 1 data
+    const savedStage1 = JSON.parse(readFileSync(stage1Path, 'utf-8'));
+    const stage1Results: Stage1Result[] = savedStage1.responses.map((r: any) => ({
+      agent: r.agent,
+      response: r.response,
+      summary: r.summary,
+    }));
+
+    console.log(`  Loaded ${stage1Results.length} responses from: state/test-council-stage1.json`);
+    console.log(`  Original timestamp: ${savedStage1.timestamp}`);
+    console.log(`  Original preset: ${savedStage1.preset}`);
+    console.log('');
+
+    // Build two-pass config
+    const twoPassConfig: TwoPassConfig = pipelineConfig.stage3.twoPass || {
+      enabled: true,
+      pass1Tier: 'default',
+      pass2Tier: 'default',
+    };
+
+    // Add custom formats if configured
+    if (pipelineConfig.stage3.twoPass?.pass1Format) {
+      twoPassConfig.pass1Format = pipelineConfig.stage3.twoPass.pass1Format;
+    }
+    if (pipelineConfig.stage3.twoPass?.pass2Format) {
+      twoPassConfig.pass2Format = pipelineConfig.stage3.twoPass.pass2Format;
+    }
+
+    console.log(`Running chairman only (skipping Stage 1)...`);
+    console.log(`  Chairman: ${pipelineConfig.stage3.chairman.name}`);
+    console.log(`  Two-pass: Pass 1 (${twoPassConfig.pass1Tier}) → Pass 2 (${twoPassConfig.pass2Tier})`);
+    console.log('');
+
+    // Run only the chairman merge
+    const twoPassResult = await runTwoPassMergeChairman(
+      testPrompt,
+      stage1Results,
+      pipelineConfig.stage3.chairman,
+      twoPassConfig,
+      timeoutMs,
+      false, // not silent
+      { outputFormat: pipelineConfig.stage3.outputFormat }
+    );
+
+    console.log(`\nStage 3 complete: ${twoPassResult.pass1.agent} + ${twoPassResult.pass2.agent}`);
+    log(`Stage 3 complete: ${twoPassResult.pass1.agent} + ${twoPassResult.pass2.agent}`);
+
+    // Build result object matching PipelineResult structure
+    result = {
+      mode: 'merge',
+      stage1: stage1Results,
+      stage2: null,
+      stage3: {
+        agent: `${twoPassResult.pass1.agent} + ${twoPassResult.pass2.agent}`,
+        response: twoPassResult.combined || twoPassResult.pass2.response || twoPassResult.pass1.response,
       },
-      onStage3Complete: (result) => {
-        console.log(`\nStage 3 complete: ${result.agent}`);
-        log(`Stage 3 complete: ${result.agent}`);
+      aggregate: null,
+      twoPassResult,
+    };
+  } else {
+    if (resumeStage1) {
+      console.log('Warning: RESUME_STAGE1=true but no Stage 1 file found. Running full pipeline.');
+    }
+
+    // Run the full pipeline
+    result = await runEnhancedPipeline(testPrompt, {
+      config: pipelineConfig,
+      timeoutMs,
+      tty: process.stdout.isTTY ?? false,
+      silent: false,
+      callbacks: {
+        onStage1Complete: (results) => {
+          console.log(`\nStage 1 complete: ${results.length} responses`);
+          log(`Stage 1 complete: ${results.length} responses`);
+
+          // Save Stage 1 responses for recovery if chairman fails
+          const stage1Output = {
+            timestamp: new Date().toISOString(),
+            preset: presetName,
+            responses: results.map(r => ({
+              agent: r.agent,
+              response_length: r.response.length,
+              response: r.response,
+              summary: r.summary,
+            })),
+          };
+          writeFileSync(stage1Path, JSON.stringify(stage1Output, null, 2));
+          console.log(`  Stage 1 responses saved to: state/test-council-stage1.json`);
+        },
+        onStage3Complete: (result) => {
+          console.log(`\nStage 3 complete: ${result.agent}`);
+          log(`Stage 3 complete: ${result.agent}`);
+        },
       },
-    },
-  });
+    });
+  }
 
   if (!result) {
     console.error('Test council failed - no result returned');

@@ -122,6 +122,9 @@ Generate a comprehensive test plan from the finalized spec:
 COUNCIL_PRESET=merge-fast npm run test-council      # Quick iteration
 COUNCIL_PRESET=merge-balanced npm run test-council  # Default quality
 COUNCIL_PRESET=merge-thorough npm run test-council  # Maximum quality
+
+# Resume from existing Stage 1 (skip responders, run chairman only)
+RESUME_STAGE1=true COUNCIL_CHAIRMAN=gemini:default npm run test-council
 ```
 
 This uses **merge mode** where ALL responses are combined (not ranked):
