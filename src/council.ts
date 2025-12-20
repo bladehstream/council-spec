@@ -23,6 +23,7 @@ import {
 } from 'agent-council';
 import type { InterviewOutput, CouncilOutput, Config, Ambiguity } from './types.js';
 import { formatList } from './utils.js';
+import { smartParseChairmanOutput, sectionsToMap } from './json-parser.js';
 
 // Note: The two-pass chairman uses default prompts from agent-council.
 // Pass 1 produces: executive_summary, ambiguities, consensus_notes, implementation_phases, section_outlines
@@ -676,62 +677,33 @@ Starting council...
       throw new Error(`Chairman returned error: ${rawResponse}`);
     }
 
-    // Parse sectioned output from two-pass chairman
-    // First try sectioned format, fall back to plain JSON if no sections found
+    // Parse chairman output using multi-strategy approach:
+    // 1. Try sectioned format (===SECTION:name===...===END:name===)
+    // 2. If no sections, use smart JSON parser with repair capabilities
     const sections = parseSectionedOutput(rawResponse);
     let sectionMap = new Map(sections.map(s => [s.name, s]));
-    let usedJsonFallback = false;
+    let parseMethod = 'sectioned format';
 
-    // If no sections found, try parsing as plain JSON
+    // If no sections found, use smart JSON parser
     if (sections.length === 0) {
-      console.log('\nNo sectioned format found, trying JSON fallback...');
-      try {
-        // Strip markdown code fences if present
-        let jsonStr = rawResponse;
-        if (jsonStr.startsWith('```json')) {
-          jsonStr = jsonStr.slice(7);
-        } else if (jsonStr.startsWith('```')) {
-          jsonStr = jsonStr.slice(3);
+      console.log('\nNo sectioned format found, using smart JSON parser...');
+      const smartResult = smartParseChairmanOutput(rawResponse);
+
+      if (smartResult.success) {
+        sectionMap = sectionsToMap(smartResult);
+        parseMethod = smartResult.method === 'json' ? 'JSON'
+          : smartResult.method === 'repaired' ? 'repaired JSON'
+          : 'extracted sections';
+
+        console.log(`  Smart parser: ${smartResult.method} (${smartResult.sections.length} sections)`);
+
+        // Log any warnings/repairs
+        for (const error of smartResult.errors) {
+          console.log(`  Note: ${error}`);
         }
-        if (jsonStr.endsWith('```')) {
-          jsonStr = jsonStr.slice(0, -3);
-        }
-
-        const parsed = JSON.parse(jsonStr.trim());
-
-        // Map JSON keys to section format
-        const jsonSections: Array<{ name: string; content: string; complete: boolean }> = [];
-
-        // Map known keys to sections
-        const keyMappings: Record<string, string> = {
-          executive_summary: 'executive_summary',
-          ambiguities: 'ambiguities',
-          consensus_notes: 'consensus_notes',
-          implementation_phases: 'implementation_phases',
-          architecture: 'architecture',
-          data_model: 'data_model',
-          api_contracts: 'api_contracts',
-          user_flows: 'user_flows',
-          security: 'security',
-          deployment: 'deployment',
-        };
-
-        for (const [jsonKey, sectionName] of Object.entries(keyMappings)) {
-          if (parsed[jsonKey] !== undefined) {
-            const content = typeof parsed[jsonKey] === 'string'
-              ? parsed[jsonKey]
-              : JSON.stringify(parsed[jsonKey], null, 2);
-            jsonSections.push({ name: sectionName, content, complete: true });
-          }
-        }
-
-        if (jsonSections.length > 0) {
-          sectionMap = new Map(jsonSections.map(s => [s.name, s]));
-          usedJsonFallback = true;
-          console.log(`  JSON fallback successful: found ${jsonSections.length} sections`);
-        }
-      } catch (e) {
-        console.warn('  JSON fallback failed:', e instanceof Error ? e.message : String(e));
+      } else {
+        console.warn('  Smart parser failed:', smartResult.errors.join('; '));
+        parseMethod = 'failed';
       }
     }
 
@@ -739,7 +711,6 @@ Starting council...
     const completeSections = Array.from(sectionMap.values()).filter(s => s.complete).map(s => s.name);
     const incompleteSections = Array.from(sectionMap.values()).filter(s => !s.complete).map(s => s.name);
 
-    const parseMethod = usedJsonFallback ? 'JSON fallback' : 'sectioned format';
     console.log(`\nParsed ${completeSections.length} complete sections from two-pass chairman (${parseMethod})`);
     if (DEBUG_LOGGING_ENABLED) {
       console.log(`  Complete: ${completeSections.join(', ')}`);
