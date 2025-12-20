@@ -1087,6 +1087,12 @@ Starting council...
         implementation_phases: structuredOutput.implementation_phases,
         consensus_notes: structuredOutput.consensus_notes,
       },
+      // Custom Stage 2 deduplication result (if enabled)
+      customStage2: result.customStage2 ? {
+        sections: result.customStage2.sections,
+        conflicts: result.customStage2.conflicts,
+        uniqueInsights: result.customStage2.uniqueInsights,
+      } : undefined,
     };
 
     writeFileSync(

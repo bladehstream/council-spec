@@ -98,6 +98,18 @@ export interface CouncilOutput {
     }>;
     consensus_notes?: string;
   };
+  /** Custom Stage 2 deduplication result (when COUNCIL_DEDUP is enabled) */
+  customStage2?: {
+    sections: Record<string, string>;
+    conflicts?: Array<{
+      topic: string;
+      positions: Array<{ agent: string; position: string }>;
+    }>;
+    uniqueInsights?: Array<{
+      source: string;
+      insight: string;
+    }>;
+  };
 }
 
 export interface SpecFinal {
