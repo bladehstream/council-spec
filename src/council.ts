@@ -633,7 +633,12 @@ function createSectionedDedupHandler(evaluatorSpec: string): Stage2CustomHandler
     const evalSpec = parseStageSpec(evaluatorSpec, availableProviders, modelsConfig);
     const evaluators = evalSpec.agents.slice(0, 3); // Max 3 evaluators
 
-    // Ensure we have 3 evaluators
+    // Ensure we have at least 1 evaluator
+    if (evaluators.length === 0) {
+      throw new Error(`No evaluator agents available for deduplication. Spec: "${evaluatorSpec}", Available providers: ${availableProviders.join(', ')}`);
+    }
+
+    // Ensure we have 3 evaluators by duplicating
     while (evaluators.length < 3) {
       evaluators.push(evaluators[0]); // Duplicate first if needed
     }
@@ -701,10 +706,11 @@ function isDedupEnabled(): boolean {
 
 /**
  * Get evaluator spec for deduplication.
- * Defaults to "3:default" for balanced quality.
+ * Always returns a valid spec with at least 3 agents.
+ * Ignores config.council.evaluators since that may be "0:default" from merge mode.
  */
-function getDedupEvaluatorSpec(config: Config): string {
-  return process.env.COUNCIL_DEDUP_EVALUATORS || config.council.evaluators || '3:default';
+function getDedupEvaluatorSpec(): string {
+  return process.env.COUNCIL_DEDUP_EVALUATORS || '3:default';
 }
 
 /**
@@ -735,7 +741,7 @@ async function runCouncil(prompt: string, config: Config): Promise<void> {
   const mergeChairmanSpec = getMergeChairmanSpec(config.council.chairman);
 
   const dedupEnabled = isDedupEnabled();
-  const dedupEvaluatorSpec = dedupEnabled ? getDedupEvaluatorSpec(config) : null;
+  const dedupEvaluatorSpec = dedupEnabled ? getDedupEvaluatorSpec() : null;
 
   console.log('Starting council with configuration:');
   console.log(`  Mode: merge (combining all agent insights)`);
