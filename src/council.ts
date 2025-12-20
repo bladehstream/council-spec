@@ -677,14 +677,70 @@ Starting council...
     }
 
     // Parse sectioned output from two-pass chairman
+    // First try sectioned format, fall back to plain JSON if no sections found
     const sections = parseSectionedOutput(rawResponse);
-    const sectionMap = new Map(sections.map(s => [s.name, s]));
+    let sectionMap = new Map(sections.map(s => [s.name, s]));
+    let usedJsonFallback = false;
+
+    // If no sections found, try parsing as plain JSON
+    if (sections.length === 0) {
+      console.log('\nNo sectioned format found, trying JSON fallback...');
+      try {
+        // Strip markdown code fences if present
+        let jsonStr = rawResponse;
+        if (jsonStr.startsWith('```json')) {
+          jsonStr = jsonStr.slice(7);
+        } else if (jsonStr.startsWith('```')) {
+          jsonStr = jsonStr.slice(3);
+        }
+        if (jsonStr.endsWith('```')) {
+          jsonStr = jsonStr.slice(0, -3);
+        }
+
+        const parsed = JSON.parse(jsonStr.trim());
+
+        // Map JSON keys to section format
+        const jsonSections: Array<{ name: string; content: string; complete: boolean }> = [];
+
+        // Map known keys to sections
+        const keyMappings: Record<string, string> = {
+          executive_summary: 'executive_summary',
+          ambiguities: 'ambiguities',
+          consensus_notes: 'consensus_notes',
+          implementation_phases: 'implementation_phases',
+          architecture: 'architecture',
+          data_model: 'data_model',
+          api_contracts: 'api_contracts',
+          user_flows: 'user_flows',
+          security: 'security',
+          deployment: 'deployment',
+        };
+
+        for (const [jsonKey, sectionName] of Object.entries(keyMappings)) {
+          if (parsed[jsonKey] !== undefined) {
+            const content = typeof parsed[jsonKey] === 'string'
+              ? parsed[jsonKey]
+              : JSON.stringify(parsed[jsonKey], null, 2);
+            jsonSections.push({ name: sectionName, content, complete: true });
+          }
+        }
+
+        if (jsonSections.length > 0) {
+          sectionMap = new Map(jsonSections.map(s => [s.name, s]));
+          usedJsonFallback = true;
+          console.log(`  JSON fallback successful: found ${jsonSections.length} sections`);
+        }
+      } catch (e) {
+        console.warn('  JSON fallback failed:', e instanceof Error ? e.message : String(e));
+      }
+    }
 
     // Report parsing results
-    const completeSections = sections.filter(s => s.complete).map(s => s.name);
-    const incompleteSections = sections.filter(s => !s.complete).map(s => s.name);
+    const completeSections = Array.from(sectionMap.values()).filter(s => s.complete).map(s => s.name);
+    const incompleteSections = Array.from(sectionMap.values()).filter(s => !s.complete).map(s => s.name);
 
-    console.log(`\nParsed ${completeSections.length} complete sections from two-pass chairman`);
+    const parseMethod = usedJsonFallback ? 'JSON fallback' : 'sectioned format';
+    console.log(`\nParsed ${completeSections.length} complete sections from two-pass chairman (${parseMethod})`);
     if (DEBUG_LOGGING_ENABLED) {
       console.log(`  Complete: ${completeSections.join(', ')}`);
       if (incompleteSections.length > 0) {
