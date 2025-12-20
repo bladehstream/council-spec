@@ -29,7 +29,7 @@ describe('Workflow Smoke Tests', () => {
   beforeAll(() => {
     // Backup existing state files
     if (existsSync(STATE_DIR)) {
-      const files = ['interview-output.json', 'council-output.json', 'spec-final.json', 'council-preferences.json'];
+      const files = ['interview-output.json', 'spec-council-output.json', 'spec-final.json', 'council-preferences.json'];
       for (const file of files) {
         const path = join(STATE_DIR, file);
         if (existsSync(path)) {

@@ -54,13 +54,13 @@ This runs the multi-agent council:
 2. **Stage 2**: Agents peer-review each other's responses
 3. **Stage 3**: Chairman synthesizes the best insights
 
-**Output:** `state/council-output.json`
+**Output:** `state/spec-council-output.json`
 
 Progress is displayed in the terminal. Typical runtime: 2-5 minutes.
 
 ### Step 4: Validation Phase
 
-The assistant reads `state/council-output.json` and presents any ambiguities:
+The assistant reads `state/spec-council-output.json` and presents any ambiguities:
 
 ```
 AMBIGUITY AMB-1: Authentication method not specified

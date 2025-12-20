@@ -13,7 +13,7 @@ This project generates complete software specifications and test plans through A
 ### Allowed Actions
 - **Create/modify files in `state/`**:
   - `state/interview-output.json` - Interview results
-  - `state/council-output.json` - Spec council results (created by `npm run council`)
+  - `state/spec-council-output.json` - Spec council results (created by `npm run council`)
   - `state/decisions.json` - Validation decisions (see schemas/decisions.json)
   - `state/spec-final.json` - Final specification (created by `npm run finalize`)
   - `state/spec-final.md` - Human-readable spec (created by `npm run export:spec`)
@@ -74,7 +74,7 @@ This uses **compete mode** where responses are ranked to find the best specifica
   - Pass 1: Summary and ambiguity identification
   - Pass 2: Detailed specification sections
 
-Output goes to `state/council-output.json`.
+Output goes to `state/spec-council-output.json`.
 
 ### 3. Validation
 Review council output. Present ambiguities to user. Record decisions in `state/decisions.json`:
@@ -111,7 +111,7 @@ npm run finalize
 
 This compiles `state/spec-final.json` from:
 - `state/interview-output.json` (requirements)
-- `state/council-output.json` (analysis)
+- `state/spec-council-output.json` (analysis)
 - `state/decisions.json` (human decisions)
 
 **Do NOT manually write spec-final.json** - always use the finalize command.
@@ -207,9 +207,9 @@ If yes, explain the available options and write preferences to `state/council-pr
 - `thorough` - 3:heavy responders, 6:heavy evaluators, heavy/heavy chairman (maximum quality)
 
 *Merge Mode (for Test Council - `npm run test-council`):*
-- `merge-fast` - 3:fast responders, no evaluators, default/default chairman (quick iteration)
-- `merge-balanced` - 3:default responders, no evaluators, heavy/default chairman (default)
-- `merge-thorough` - 3:heavy responders, no evaluators, heavy/heavy chairman (maximum quality)
+- `merge-fast` - 3:fast responders, no evaluators, default/fast chairman (quick iteration)
+- `merge-balanced` - 3:default responders, no evaluators, default/default chairman (default)
+- `merge-thorough` - 3:heavy responders, no evaluators, default/default chairman (maximum coverage)
 
 All presets use two-pass chairman synthesis for reliable large output generation.
 
@@ -225,7 +225,15 @@ COUNCIL_PRESET=thorough npm run council  # Maximum quality
 
 # Override specific parts while keeping preset base
 COUNCIL_PRESET=fast COUNCIL_CHAIRMAN=claude:heavy npm run council
+
+# Granular chairman control (pass1tier/pass2tier)
+COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=claude:heavy/default npm run test-council
+# Pass 1 uses heavy (synthesis), Pass 2 uses default (JSON formatting)
 ```
+
+**Chairman Format:**
+- `provider:tier` - Use same tier for both passes (e.g., `claude:heavy`)
+- `provider:pass1tier/pass2tier` - Different tiers per pass (e.g., `gemini:heavy/default`)
 
 **DO NOT use individual env vars without COUNCIL_PRESET:**
 ```bash

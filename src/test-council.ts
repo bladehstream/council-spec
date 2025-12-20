@@ -68,6 +68,13 @@ interface ExtendedSpec {
 // Test Plan Types
 // ============================================================================
 
+interface TestSource {
+  model: string;              // Primary contributor (e.g., "claude:default")
+  merged_from?: string[];     // If deduplicated from multiple models
+  similarity_note?: string;   // Optional note if merged similar tests
+  created_by_chairman?: boolean; // True if test was added during gap analysis
+}
+
 interface TestCase {
   id: string;
   name: string;
@@ -78,6 +85,14 @@ interface TestCase {
   steps?: string[];
   expected_result: string;
   coverage?: string[];
+  source?: TestSource;                              // Model attribution
+  atomicity?: 'atomic' | 'split_recommended';       // Atomicity status
+  split_suggestion?: string[];                      // Suggested split test names
+  split_from?: string;                              // Original test ID if split
+  quantifiable?: boolean;                           // False if acceptance criteria unclear
+  clarification_needed?: string;                    // What's missing from spec
+  suggested_threshold?: string;                     // AI-suggested quantifiable criteria
+  spec_section?: string;                            // Where in spec this should be defined
 }
 
 interface TestPlanOutput {
@@ -99,12 +114,31 @@ interface TestPlanOutput {
   coverage_summary: {
     features_covered: string[];
     gaps_identified: string[];
+    quantifiability?: {
+      total_tests: number;
+      quantifiable: number;
+      needs_clarification: number;
+      clarification_report?: string;
+    };
   };
   merge_metadata?: {
     models_used: string[];
     unique_contributions: Array<{
       source: string;
       count: number;
+    }>;
+    attribution_summary?: {
+      unique_tests: number;      // Tests from single model
+      merged_tests: number;      // Tests merged from multiple models
+      by_model: Record<string, number>;  // Count per model
+    };
+  };
+  split_metadata?: {
+    original_count: number;
+    split_count: number;
+    tests_split: Array<{
+      original_id: string;
+      split_into: string[];
     }>;
   };
 }
@@ -258,8 +292,8 @@ async function main() {
   const version = spec.metadata?.version || '1.0.0';
   console.log(`Loaded spec: ${projectName} v${version}`);
 
-  // Determine preset
-  const presetName = process.env.TEST_COUNCIL_PRESET || 'merge-balanced';
+  // Determine preset (TEST_COUNCIL_PRESET overrides COUNCIL_PRESET for test-specific presets)
+  const presetName = process.env.TEST_COUNCIL_PRESET || process.env.COUNCIL_PRESET || 'merge-balanced';
   console.log(`Using preset: ${presetName}`);
 
   // Load config and get available providers
@@ -280,19 +314,193 @@ async function main() {
   const preset = getPreset(presetName, config);
   const pipelineConfig = buildPipelineConfig(preset, availableProviders, config);
 
+  // Apply environment variable overrides
+  if (process.env.COUNCIL_CHAIRMAN) {
+    const chairmanSpec = process.env.COUNCIL_CHAIRMAN;
+    console.log(`Overriding chairman with: ${chairmanSpec}`);
+
+    // Parse format: provider:tier or provider:pass1tier/pass2tier
+    // Examples: claude:heavy, gemini:heavy/default, claude:default/fast
+    const [provider, tierPart] = chairmanSpec.split(':');
+    let pass1Tier: 'fast' | 'default' | 'heavy' = 'default';
+    let pass2Tier: 'fast' | 'default' | 'heavy' = 'default';
+
+    if (tierPart) {
+      if (tierPart.includes('/')) {
+        // Granular format: pass1tier/pass2tier
+        const [p1, p2] = tierPart.split('/');
+        pass1Tier = (p1 || 'default') as 'fast' | 'default' | 'heavy';
+        pass2Tier = (p2 || 'default') as 'fast' | 'default' | 'heavy';
+        console.log(`  Pass 1: ${provider}:${pass1Tier}, Pass 2: ${provider}:${pass2Tier}`);
+      } else {
+        // Single tier for both passes
+        pass1Tier = tierPart as 'fast' | 'default' | 'heavy';
+        pass2Tier = tierPart as 'fast' | 'default' | 'heavy';
+      }
+    }
+
+    // Create chairman agent using pass1 tier (primary tier for chairman identity)
+    const chairmanAgent = createAgentFromSpec(`${provider}:${pass1Tier}`);
+    pipelineConfig.stage3.chairman = chairmanAgent;
+
+    if (pipelineConfig.stage3.twoPass) {
+      pipelineConfig.stage3.twoPass.pass1Tier = pass1Tier;
+      pipelineConfig.stage3.twoPass.pass2Tier = pass2Tier;
+    }
+  }
+
+  if (process.env.COUNCIL_RESPONDERS) {
+    const respondersSpec = process.env.COUNCIL_RESPONDERS;
+    console.log(`Overriding responders with: ${respondersSpec}`);
+    // Parse responders spec (e.g., "3:heavy" or "claude:heavy,gemini:heavy,codex:heavy")
+    const responderAgents = respondersSpec.includes(':') && !respondersSpec.includes(',')
+      ? // Count:tier format like "3:heavy"
+        (() => {
+          const [countStr, tier] = respondersSpec.split(':');
+          const count = parseInt(countStr, 10);
+          return availableProviders.slice(0, count).map(p => createAgentFromSpec(`${p}:${tier}`));
+        })()
+      : // Explicit list like "claude:heavy,gemini:heavy"
+        respondersSpec.split(',').map(spec => createAgentFromSpec(spec.trim()));
+    pipelineConfig.stage1.agents = responderAgents;
+  }
+
   // Override stage1 prompt with our test plan prompt
   const testPrompt = buildTestPlanPrompt(spec);
   pipelineConfig.stage1.prompt = testPrompt;
 
-  // Set output format for chairman
+  // Set output format for chairman with source attribution and atomicity analysis
+  const modelsUsed = pipelineConfig.stage1.agents.map(a => a.name).join(', ');
   pipelineConfig.stage3.outputFormat = `Output the merged test plan as JSON. Combine all tests from all responses.
 Deduplicate similar tests, keeping the most detailed version.
 Include ALL unique test ideas from every response.
 
+## RESPONSE FORMAT
+
+Each responder's output is tagged with this format:
+===RESPONSE FROM: <model_name>===
+MODEL: <model_name>
+RESPONSE_INDEX: N
+
+<response content>
+
+===END RESPONSE FROM: <model_name>===
+
+Use the MODEL field to identify which model contributed each test.
+The models providing tests are: ${modelsUsed}
+
+## SOURCE ATTRIBUTION
+
+For EACH test, include a "source" object tracking which model(s) contributed it:
+- If a test came from ONE model only: source.model = "<model_name>" (use the MODEL field value)
+- If similar tests existed in multiple models and you kept one version:
+  - source.model = "<model whose version you kept>"
+  - source.merged_from = ["<other models with similar test>"]
+- If you combined content from multiple tests: add source.similarity_note explaining the merge
+- If YOU (the chairman) create a NEW test during gap analysis that was NOT in any responder's output:
+  - source.model = "chairman"
+  - source.created_by_chairman = true
+  - Do NOT attribute chairman-created tests to responder models
+
+## ATOMICITY ANALYSIS
+
+For EACH test, evaluate if it should be split into smaller atomic tests.
+
+SPLIT INDICATORS (set atomicity: "split_recommended"):
+- More than 6 steps
+- Steps test fundamentally different code paths (e.g., generation vs validation)
+- Multiple distinct expected outcomes implied
+- "and" in the test name suggesting multiple concerns
+- Steps that could fail independently
+
+DO NOT SPLIT (set atomicity: "atomic" or omit the field):
+- Sequential steps that form one logical flow
+- Setup steps followed by a single verification
+- Tests where steps are interdependent
+
+For tests that should be split:
+1. Add field: "atomicity": "split_recommended"
+2. Add field: "split_suggestion": ["<suggested test 1 name>", "<suggested test 2 name>", ...]
+
+## QUANTIFIABILITY ANALYSIS
+
+For EACH test, evaluate if the expected_result is objectively verifiable.
+
+QUANTIFIABLE (good - omit the quantifiable field or set to true):
+- "Returns 200 status code"
+- "Latency < 500ms"
+- "Exactly 6 numeric digits"
+- "File size < 5MB"
+- "Completes within 30 seconds"
+
+NOT QUANTIFIABLE (flag with quantifiable: false):
+- "Works correctly"
+- "Gracefully degrades"
+- "Performs well"
+- "At threshold" (threshold undefined in spec)
+- "Reasonable time"
+- "Appropriate response"
+
+For tests with unquantifiable acceptance criteria:
+1. Add field: "quantifiable": false
+2. Add field: "clarification_needed": "<what specific threshold or criteria is missing>"
+3. Add field: "suggested_threshold": "<if you can infer a reasonable threshold from context>"
+4. Add field: "spec_section": "<which part of the spec should define this threshold>"
+
 JSON structure:
 {
   "tests": {
-    "unit": [...],
+    "unit": [
+      {
+        "id": "UNIT-001",
+        "name": "Test name",
+        "description": "...",
+        "priority": "high",
+        "category": "...",
+        "steps": ["step1", "step2"],
+        "expected_result": "...",
+        "source": {
+          "model": "claude:default",
+          "merged_from": ["gemini:default"],
+          "similarity_note": "Combined assertions from both models"
+        },
+        "atomicity": "atomic"
+      },
+      {
+        "id": "UNIT-002",
+        "name": "Token Generation and Validation",
+        "description": "...",
+        "priority": "high",
+        "category": "...",
+        "steps": ["generate token", "validate format", "test expiry", "test invalid tokens", ...],
+        "expected_result": "...",
+        "source": { "model": "gemini:default" },
+        "atomicity": "split_recommended",
+        "split_suggestion": ["Token Generation", "Token Format Validation", "Token Expiry", "Invalid Token Handling"]
+      },
+      {
+        "id": "PERF-007",
+        "name": "Thermal Throttling Behavior",
+        "description": "...",
+        "priority": "high",
+        "category": "performance",
+        "expected_result": "System gracefully degrades under thermal pressure",
+        "source": { "model": "codex:default" },
+        "quantifiable": false,
+        "clarification_needed": "What CPU temperature triggers throttling? What does 'gracefully' mean?",
+        "suggested_threshold": "Throttle at CPU > 85°C; graceful = no crashes, <1s transition",
+        "spec_section": "Architecture > Thermal Management"
+      },
+      {
+        "id": "SEC-010",
+        "name": "SQL Injection Prevention",
+        "description": "Test added by chairman during gap analysis - not in any responder output",
+        "priority": "critical",
+        "category": "security",
+        "expected_result": "All user inputs are properly sanitized",
+        "source": { "model": "chairman", "created_by_chairman": true }
+      }
+    ],
     "integration": [...],
     "e2e": [...],
     "security": [...],
@@ -322,16 +530,36 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
   console.log(`  Responders: ${pipelineConfig.stage1.agents.length}`);
   console.log('');
 
+  // Determine timeout based on preset (heavy models need more time)
+  const isHeavyPreset = presetName.includes('thorough') || presetName.includes('heavy');
+  const timeoutMs = isHeavyPreset ? 1200000 : 600000; // 20 minutes for heavy, 10 for others
+  console.log(`  Timeout: ${timeoutMs / 60000} minutes${isHeavyPreset ? ' (heavy preset)' : ''}`);
+
   // Run the pipeline
   const result = await runEnhancedPipeline(testPrompt, {
     config: pipelineConfig,
-    timeoutMs: 600000, // 10 minutes
+    timeoutMs,
     tty: process.stdout.isTTY ?? false,
     silent: false,
     callbacks: {
       onStage1Complete: (results) => {
         console.log(`\nStage 1 complete: ${results.length} responses`);
         log(`Stage 1 complete: ${results.length} responses`);
+
+        // Save Stage 1 responses for recovery if chairman fails
+        const stage1Output = {
+          timestamp: new Date().toISOString(),
+          preset: presetName,
+          responses: results.map(r => ({
+            agent: r.agent,
+            response_length: r.response.length,
+            response: r.response,
+            summary: r.summary,
+          })),
+        };
+        const stage1Path = join(STATE_DIR, 'test-council-stage1.json');
+        writeFileSync(stage1Path, JSON.stringify(stage1Output, null, 2));
+        console.log(`  Stage 1 responses saved to: state/test-council-stage1.json`);
       },
       onStage3Complete: (result) => {
         console.log(`\nStage 3 complete: ${result.agent}`);
@@ -355,25 +583,30 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
     const jsonContent = jsonMatch ? jsonMatch[1] : result.stage3.response;
     const parsed = JSON.parse(jsonContent);
 
+    const tests = parsed.tests || {
+      unit: [],
+      integration: [],
+      e2e: [],
+      security: [],
+      performance: [],
+      edge_cases: [],
+    };
+
     testPlan = {
       metadata: {
         project_id: projectName,
         spec_version: version,
         generated_at: new Date().toISOString(),
-        total_tests: countTests(parsed.tests),
+        total_tests: countTests(tests),
         preset_used: presetName,
       },
-      tests: parsed.tests || {
-        unit: [],
-        integration: [],
-        e2e: [],
-        security: [],
-        performance: [],
-        edge_cases: [],
-      },
-      coverage_summary: parsed.coverage_summary || {
-        features_covered: [],
-        gaps_identified: [],
+      tests,
+      coverage_summary: {
+        ...(parsed.coverage_summary || {
+          features_covered: [],
+          gaps_identified: [],
+        }),
+        quantifiability: computeQuantifiabilityStats(tests),
       },
       merge_metadata: {
         models_used: result.stage1.map(r => r.agent),
@@ -381,6 +614,7 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
           source: r.agent,
           count: countTestsInResponse(r.response),
         })),
+        attribution_summary: computeAttributionSummary(tests),
       },
     };
   } catch (e) {
@@ -441,6 +675,16 @@ Output: state/test-plan-output.json
   console.log(`  Security: ${testPlan.tests.security.length}`);
   console.log(`  Performance: ${testPlan.tests.performance.length}`);
   console.log(`  Edge Cases: ${testPlan.tests.edge_cases.length}`);
+
+  // Quantifiability summary
+  const quantStats = testPlan.coverage_summary.quantifiability;
+  if (quantStats && quantStats.needs_clarification > 0) {
+    console.log('');
+    console.log(`  Quantifiability: ${quantStats.quantifiable}/${quantStats.total_tests} tests have clear acceptance criteria`);
+    console.log(`  Needs clarification: ${quantStats.needs_clarification} tests`);
+    console.log('  Run "npm run test-finalize" to generate clarification report');
+  }
+
   console.log('');
   console.log(`Output: state/test-plan-output.json`);
 }
@@ -455,6 +699,66 @@ function countTests(tests: TestPlanOutput['tests']): number {
     (tests.performance?.length || 0) +
     (tests.edge_cases?.length || 0)
   );
+}
+
+function computeAttributionSummary(tests: TestPlanOutput['tests']): NonNullable<NonNullable<TestPlanOutput['merge_metadata']>['attribution_summary']> {
+  const allTests: TestCase[] = [
+    ...(tests.unit || []),
+    ...(tests.integration || []),
+    ...(tests.e2e || []),
+    ...(tests.security || []),
+    ...(tests.performance || []),
+    ...(tests.edge_cases || []),
+  ];
+
+  let uniqueTests = 0;
+  let mergedTests = 0;
+  const byModel: Record<string, number> = {};
+
+  for (const test of allTests) {
+    if (test.source?.model) {
+      // Count by primary model
+      byModel[test.source.model] = (byModel[test.source.model] || 0) + 1;
+
+      // Check if merged from multiple
+      if (test.source.merged_from && test.source.merged_from.length > 0) {
+        mergedTests++;
+        // Also count the models it was merged from
+        for (const model of test.source.merged_from) {
+          byModel[model] = (byModel[model] || 0) + 1;
+        }
+      } else {
+        uniqueTests++;
+      }
+    }
+  }
+
+  return {
+    unique_tests: uniqueTests,
+    merged_tests: mergedTests,
+    by_model: byModel,
+  };
+}
+
+function computeQuantifiabilityStats(tests: TestPlanOutput['tests']): NonNullable<TestPlanOutput['coverage_summary']['quantifiability']> {
+  const allTests: TestCase[] = [
+    ...(tests.unit || []),
+    ...(tests.integration || []),
+    ...(tests.e2e || []),
+    ...(tests.security || []),
+    ...(tests.performance || []),
+    ...(tests.edge_cases || []),
+  ];
+
+  const totalTests = allTests.length;
+  const needsClarification = allTests.filter(t => t.quantifiable === false).length;
+  const quantifiable = totalTests - needsClarification;
+
+  return {
+    total_tests: totalTests,
+    quantifiable,
+    needs_clarification: needsClarification,
+  };
 }
 
 function countTestsInResponse(response: string): number {

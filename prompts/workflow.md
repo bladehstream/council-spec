@@ -101,7 +101,7 @@ The council runs automatically. Wait for it to complete.
 
 ## Phase 3: Validation
 
-Read `state/council-output.json` or use the validation helper:
+Read `state/spec-council-output.json` or use the validation helper:
 
 ```bash
 npm run validate status    # Check current state

@@ -22,7 +22,7 @@ Council Spec guides you through a structured process to transform project ideas 
 │                                                                 │
 │  2. SPEC COUNCIL     Multi-agent analysis (COMPETE mode)        │
 │        ↓             Agents ranked → best refined by chairman   │
-│                      → state/council-output.json                │
+│                      → state/spec-council-output.json           │
 │                                                                 │
 │  3. VALIDATION       Resolve ambiguities with human input       │
 │        ↓             → state/decisions.json                     │
@@ -169,9 +169,9 @@ Use for `npm run test-council` - ALL responses combined for comprehensive covera
 
 | Preset | Stage 1 | Stage 2 | Chairman | Output Quality |
 |--------|---------|---------|----------|----------------|
-| `merge-fast` | 3x fast | *skipped* | default/default | Quick test ideas |
-| `merge-balanced` | 3x default | *skipped* | heavy/default | Comprehensive tests |
-| `merge-thorough` | 3x heavy | *skipped* | heavy/heavy | Maximum coverage |
+| `merge-fast` | 3x fast | *skipped* | default/fast | Quick test ideas |
+| `merge-balanced` | 3x default | *skipped* | default/default | Comprehensive tests |
+| `merge-thorough` | 3x heavy | *skipped* | default/default | Maximum coverage |
 
 ### Two-Pass Chairman
 
@@ -192,7 +192,16 @@ COUNCIL_PRESET=fast COUNCIL_CHAIRMAN=claude:heavy npm run council
 
 # Use balanced preset with longer timeout
 COUNCIL_PRESET=balanced COUNCIL_TIMEOUT=600 npm run council
+
+# Granular chairman control (different tiers per pass)
+COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=claude:heavy/default npm run test-council
 ```
+
+**Chairman Format:**
+- `provider:tier` - Same tier for both passes (e.g., `claude:heavy`)
+- `provider:pass1tier/pass2tier` - Different tiers per pass (e.g., `gemini:heavy/default`)
+
+This is useful when Pass 1 (synthesis/analysis) benefits from heavier reasoning, but Pass 2 (JSON formatting) needs speed and reliability.
 
 ## Configuration
 
@@ -249,7 +258,7 @@ council-spec/
 | File | Created By | Contents |
 |------|-----------|----------|
 | `interview-output.json` | Interview phase | Structured requirements |
-| `council-output.json` | Spec Council phase | Multi-agent analysis + spec sections |
+| `spec-council-output.json` | Spec Council phase | Multi-agent analysis + spec sections |
 | `decisions.json` | Validation phase | Human decisions on ambiguities |
 | `spec-final.json` | Finalize phase | Complete specification (~100KB) |
 | `spec-final.md` | Export phase | Human-readable specification |

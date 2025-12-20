@@ -493,33 +493,64 @@ Starting council...
     // Parse stage specs from config
     const stage1Spec = parseStageSpec(config.council.responders, availableProviders, modelsConfig);
     const stage2Spec = parseStageSpec(config.council.evaluators, availableProviders, modelsConfig);
-    const chairman = createAgentFromSpec(config.council.chairman);
+
+    // Parse chairman spec - supports granular format: provider:pass1tier/pass2tier
+    // Examples: claude:heavy, gemini:heavy/default, claude:default/fast
+    let chairmanSpec = config.council.chairman;
+    let chairmanPass1Tier: 'fast' | 'default' | 'heavy' = 'default';
+    let chairmanPass2Tier: 'fast' | 'default' | 'heavy' = 'default';
+    let hasGranularChairman = false;
+
+    const [chairmanProvider, tierPart] = chairmanSpec.split(':');
+    if (tierPart && tierPart.includes('/')) {
+      // Granular format: pass1tier/pass2tier
+      hasGranularChairman = true;
+      const [p1, p2] = tierPart.split('/');
+      chairmanPass1Tier = (p1 || 'default') as 'fast' | 'default' | 'heavy';
+      chairmanPass2Tier = (p2 || 'default') as 'fast' | 'default' | 'heavy';
+      // Normalize spec for createAgentFromSpec (use pass1 tier)
+      chairmanSpec = `${chairmanProvider}:${chairmanPass1Tier}`;
+      console.log(`  Chairman: ${chairmanProvider} (Pass 1: ${chairmanPass1Tier}, Pass 2: ${chairmanPass2Tier})`);
+    } else if (tierPart) {
+      chairmanPass1Tier = tierPart as 'fast' | 'default' | 'heavy';
+      chairmanPass2Tier = tierPart as 'fast' | 'default' | 'heavy';
+    }
+
+    const chairman = createAgentFromSpec(chairmanSpec);
 
     // Build fallback chairman
-    const fallbackChairman = getFallbackChairman(config.council.chairman);
+    const fallbackChairman = getFallbackChairman(chairmanSpec);
     if (fallbackChairman) {
       console.log(`  Fallback Chairman: ${fallbackChairman.name}`);
     }
 
-    // Build two-pass configuration - use preset config if available, otherwise calculate from chairman tier
+    // Build two-pass configuration
+    // Priority: granular chairman format > preset config > calculated from tier
     const presetTwoPass = (config.council as any)._twoPass as TwoPassConfig | undefined;
     let twoPassConfig: TwoPassConfig;
 
-    if (presetTwoPass?.enabled) {
+    if (hasGranularChairman) {
+      // Use explicitly specified tiers from chairman spec
+      twoPassConfig = {
+        enabled: true,
+        pass1Tier: chairmanPass1Tier,
+        pass2Tier: chairmanPass2Tier,
+      };
+      // Already logged above
+    } else if (presetTwoPass?.enabled) {
       // Use two-pass config from preset
       twoPassConfig = presetTwoPass;
       console.log(`  Two-Pass Mode: Pass 1 (${presetTwoPass.pass1Tier || 'default'}) → Pass 2 (${presetTwoPass.pass2Tier || 'default'}) [from preset]`);
     } else {
       // Calculate from chairman tier with 'default' floor for Pass 2
-      const { tier: chairmanTier } = parseAgentSpec(config.council.chairman);
-      const pass2Tier = chairmanTier === 'heavy' ? 'default' : 'default'; // Floor at 'default'
+      const pass2Tier = chairmanPass1Tier === 'heavy' ? 'default' : 'default'; // Floor at 'default'
 
       twoPassConfig = {
         enabled: true,
-        pass1Tier: chairmanTier,
-        pass2Tier: pass2Tier === chairmanTier ? undefined : pass2Tier as 'fast' | 'default' | 'heavy',
+        pass1Tier: chairmanPass1Tier,
+        pass2Tier: pass2Tier === chairmanPass1Tier ? undefined : pass2Tier as 'fast' | 'default' | 'heavy',
       };
-      console.log(`  Two-Pass Mode: Pass 1 (${chairmanTier}) → Pass 2 (${pass2Tier})`);
+      console.log(`  Two-Pass Mode: Pass 1 (${chairmanPass1Tier}) → Pass 2 (${pass2Tier})`);
     }
 
     // Build pipeline config with two-pass chairman, fallback, and summaries
@@ -737,7 +768,7 @@ Starting council...
     };
 
     writeFileSync(
-      join(ROOT, 'state', 'council-output.json'),
+      join(ROOT, 'state', 'spec-council-output.json'),
       JSON.stringify(councilOutput, null, 2)
     );
 
@@ -745,10 +776,10 @@ Starting council...
 Council complete.
 Agents used: ${councilOutput.stage1.map(s => s.agent).join(', ') || 'N/A'}
 Ambiguities found: ${councilOutput.ambiguities.length}
-Output written to state/council-output.json
+Output written to state/spec-council-output.json
 `);
 
-    console.log('\n\nCouncil complete. Output written to state/council-output.json');
+    console.log('\n\nCouncil complete. Output written to state/spec-council-output.json');
   } catch (error) {
     console.error('Council failed:', error);
     log(`[${new Date().toISOString()}]

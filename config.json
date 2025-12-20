@@ -14,5 +14,9 @@
     "evaluators": "3:default",
     "chairman": "claude:heavy",
     "timeout_seconds": 420
+  },
+  "test_council": {
+    "auto_split_tests": false,
+    "split_step_threshold": 6
   }
 }

@@ -32,7 +32,7 @@ interface AmbiguityStatus {
 }
 
 function loadCouncilOutput(): CouncilOutput | null {
-  const path = join(STATE_DIR, 'council-output.json');
+  const path = join(STATE_DIR, 'spec-council-output.json');
   if (!existsSync(path)) {
     return null;
   }
@@ -146,7 +146,7 @@ console.log('');
 // Load council output
 const council = loadCouncilOutput();
 if (!council) {
-  console.error('Error: state/council-output.json not found');
+  console.error('Error: state/spec-council-output.json not found');
   console.error('Run npm run council first.');
   process.exit(1);
 }

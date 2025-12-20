@@ -24,6 +24,13 @@ const STATE_DIR = join(ROOT, 'state');
 // Types
 // ============================================================================
 
+interface TestSource {
+  model: string;              // Primary contributor (e.g., "claude:default" or "chairman")
+  merged_from?: string[];     // If deduplicated from multiple models
+  similarity_note?: string;   // Optional note if merged similar tests
+  created_by_chairman?: boolean; // True if test was added during gap analysis
+}
+
 interface TestCase {
   id: string;
   name: string;
@@ -34,6 +41,14 @@ interface TestCase {
   steps?: string[];
   expected_result: string;
   coverage?: string[];
+  source?: TestSource;                              // Model attribution
+  atomicity?: 'atomic' | 'split_recommended';       // Atomicity status
+  split_suggestion?: string[];                      // Suggested split test names
+  split_from?: string;                              // Original test ID if split
+  quantifiable?: boolean;                           // False if acceptance criteria unclear
+  clarification_needed?: string;                    // What's missing from spec
+  suggested_threshold?: string;                     // AI-suggested quantifiable criteria
+  spec_section?: string;                            // Where in spec this should be defined
 }
 
 interface TestPlanOutput {
@@ -55,12 +70,31 @@ interface TestPlanOutput {
   coverage_summary: {
     features_covered: string[];
     gaps_identified: string[];
+    quantifiability?: {
+      total_tests: number;
+      quantifiable: number;
+      needs_clarification: number;
+      clarification_report?: string;
+    };
   };
   merge_metadata?: {
     models_used: string[];
     unique_contributions: Array<{
       source: string;
       count: number;
+    }>;
+    attribution_summary?: {
+      unique_tests: number;
+      merged_tests: number;
+      by_model: Record<string, number>;
+    };
+  };
+  split_metadata?: {
+    original_count: number;
+    split_count: number;
+    tests_split: Array<{
+      original_id: string;
+      split_into: string[];
     }>;
   };
 }
@@ -88,6 +122,28 @@ function generateTestTable(tests: TestCase[]): string {
   );
 }
 
+function formatSourceAttribution(source?: TestSource): string {
+  if (!source?.model) return '';
+
+  let attribution: string;
+
+  if (source.created_by_chairman || source.model === 'chairman') {
+    attribution = `**Source:** Chairman (gap analysis)`;
+  } else {
+    attribution = `**Source:** ${source.model}`;
+
+    if (source.merged_from && source.merged_from.length > 0) {
+      attribution += ` (also in: ${source.merged_from.join(', ')})`;
+    }
+  }
+
+  if (source.similarity_note) {
+    attribution += `\n*${source.similarity_note}*`;
+  }
+
+  return attribution + '\n';
+}
+
 function generateDetailedTests(tests: TestCase[], sectionName: string): string {
   if (!tests || tests.length === 0) {
     return '';
@@ -100,6 +156,37 @@ function generateDetailedTests(tests: TestCase[], sectionName: string): string {
     lines.push(`#### ${test.id}: ${test.name}\n`);
     lines.push(`**Priority:** ${priorityBadge(test.priority)}  `);
     lines.push(`**Category:** ${test.category}\n`);
+
+    // Add split_from if this test was split from another
+    if (test.split_from) {
+      lines.push(`**Split from:** ${test.split_from}\n`);
+    }
+
+    // Add atomicity warning if split is recommended but not done
+    if (test.atomicity === 'split_recommended') {
+      lines.push(`\n> **Note:** This test is marked for splitting into atomic units.\n`);
+      if (test.split_suggestion?.length) {
+        lines.push(`> Suggested splits: ${test.split_suggestion.join(', ')}\n`);
+      }
+    }
+
+    // Add quantifiability warning if acceptance criteria is unclear
+    if (test.quantifiable === false) {
+      lines.push(`\n> **Warning:** This test needs spec clarification.\n`);
+      if (test.clarification_needed) {
+        lines.push(`> ${test.clarification_needed}\n`);
+      }
+      if (test.suggested_threshold) {
+        lines.push(`> *AI Suggestion:* ${test.suggested_threshold}\n`);
+      }
+    }
+
+    // Add source attribution if available
+    const sourceAttr = formatSourceAttribution(test.source);
+    if (sourceAttr) {
+      lines.push(sourceAttr);
+    }
+
     lines.push('\n**Description:**\n');
     lines.push(test.description + '\n');
 
@@ -247,6 +334,18 @@ function generateMarkdown(plan: TestPlanOutput): string {
     lines.push('_No gaps identified_\n');
   }
 
+  // Quantifiability summary
+  if (plan.coverage_summary.quantifiability) {
+    const quant = plan.coverage_summary.quantifiability;
+    lines.push('\n### Quantifiability\n');
+    lines.push(`- **Total tests:** ${quant.total_tests}\n`);
+    lines.push(`- **Quantifiable:** ${quant.quantifiable}\n`);
+    lines.push(`- **Needs clarification:** ${quant.needs_clarification}\n`);
+    if (quant.clarification_report) {
+      lines.push(`\nSee [${quant.clarification_report}](${quant.clarification_report}) for details.\n`);
+    }
+  }
+
   // Merge metadata
   if (plan.merge_metadata) {
     lines.push(hr());
@@ -255,12 +354,44 @@ function generateMarkdown(plan: TestPlanOutput): string {
     lines.push(formatBulletList(plan.merge_metadata.models_used));
 
     if (plan.merge_metadata.unique_contributions?.length) {
-      lines.push('\n### Contributions by Model\n');
+      lines.push('\n### Contributions by Model (Stage 1)\n');
       const contribRows = plan.merge_metadata.unique_contributions.map(c => [
         c.source,
         String(c.count),
       ]);
-      lines.push(createTable(['Model', 'Tests Contributed'], contribRows));
+      lines.push(createTable(['Model', 'Tests Proposed'], contribRows));
+    }
+
+    // Attribution summary (final merged counts)
+    if (plan.merge_metadata.attribution_summary) {
+      const attr = plan.merge_metadata.attribution_summary;
+      lines.push('\n### Attribution Summary (Final Output)\n');
+      lines.push(`- **Unique tests** (single model): ${attr.unique_tests}\n`);
+      lines.push(`- **Merged tests** (multiple models): ${attr.merged_tests}\n`);
+
+      if (Object.keys(attr.by_model).length > 0) {
+        lines.push('\n**Tests by Model (including merged):**\n');
+        const attrRows = Object.entries(attr.by_model)
+          .sort((a, b) => b[1] - a[1])
+          .map(([model, count]) => [model, String(count)]);
+        lines.push(createTable(['Model', 'Tests Contributed'], attrRows));
+      }
+    }
+  }
+
+  // Split metadata
+  if (plan.split_metadata) {
+    lines.push(hr());
+    lines.push('## Test Splitting Summary\n');
+    lines.push(`- **Original test count:** ${plan.split_metadata.original_count}\n`);
+    lines.push(`- **Final test count:** ${plan.split_metadata.split_count}\n`);
+    lines.push(`- **Tests split:** ${plan.split_metadata.tests_split.length}\n`);
+
+    if (plan.split_metadata.tests_split.length > 0) {
+      lines.push('\n### Split Details\n');
+      for (const split of plan.split_metadata.tests_split) {
+        lines.push(`- **${split.original_id}** split into: ${split.split_into.join(', ')}\n`);
+      }
     }
   }
 

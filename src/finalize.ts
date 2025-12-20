@@ -201,7 +201,7 @@ console.log('');
 
 // Load required files
 const interview = loadJson<InterviewOutput>('interview-output.json')!;
-const council = loadJson<CouncilOutput>('council-output.json')!;
+const council = loadJson<CouncilOutput>('spec-council-output.json')!
 const decisions = loadJson<ValidationDecisions>('decisions.json', false);
 
 // Verify council was run on the current interview

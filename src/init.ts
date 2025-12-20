@@ -20,7 +20,7 @@ if (!existsSync(convDir)) {
 }
 
 // Clean state for new project (but preserve conversations)
-const files = ['interview-output.json', 'council-output.json', 'spec-final.json'];
+const files = ['interview-output.json', 'spec-council-output.json', 'spec-final.json'];
 for (const file of files) {
   const path = join(stateDir, file);
   if (existsSync(path)) {
