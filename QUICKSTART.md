@@ -51,22 +51,17 @@ COUNCIL_PRESET=merge-balanced npm run council
 
 This runs the multi-agent council in **merge mode**:
 1. **Stage 1**: Multiple agents analyze your requirements independently
-2. **Stage 2**: Skipped (or optional sectioned deduplication with `COUNCIL_DEDUP=true`)
+2. **Stage 2**: Sectioned deduplication pre-consolidates content (enabled by default)
 3. **Stage 3**: Chairman merges ALL unique insights from every agent
 
 **Output:** `state/spec-council-output.json`
 
-Progress is displayed in the terminal. Typical runtime: 2-5 minutes.
+Progress is displayed in the terminal. Typical runtime: 3-6 minutes.
 
 **Presets:**
 - `merge-fast` - Quick iteration
 - `merge-balanced` - Default quality (recommended)
 - `merge-thorough` - Maximum detail
-
-**Optional:** For very large outputs, enable sectioned deduplication:
-```bash
-COUNCIL_DEDUP=true COUNCIL_PRESET=merge-balanced npm run council
-```
 
 ### Step 4: Validation Phase
 

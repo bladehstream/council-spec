@@ -693,10 +693,10 @@ function createSectionedDedupHandler(evaluatorSpec: string): Stage2CustomHandler
 
 /**
  * Check if sectioned deduplication is enabled.
- * Controlled by COUNCIL_DEDUP env var or preset.
+ * Deduplication is ON by default. Set COUNCIL_SKIP_DEDUP=true to disable.
  */
 function isDedupEnabled(): boolean {
-  return process.env.COUNCIL_DEDUP === 'true';
+  return process.env.COUNCIL_SKIP_DEDUP !== 'true';
 }
 
 /**

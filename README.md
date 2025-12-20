@@ -56,18 +56,14 @@ An AI assistant interviews you about your project:
 Multiple AI agents independently analyze your requirements using **merge mode**:
 
 - **Stage 1**: Each agent (Claude, Gemini, Codex) produces their analysis
-- **Stage 2**: Optional sectioned deduplication (enabled via `COUNCIL_DEDUP=true`) or skipped
+- **Stage 2**: Sectioned deduplication pre-consolidates content (enabled by default)
 - **Stage 3**: Two-pass chairman synthesis **merges ALL** unique insights:
   - **Pass 1**: Executive summary, ambiguities, consensus notes, implementation phases
   - **Pass 2**: Detailed specifications (architecture, data model, APIs, user flows, security, deployment)
 
 **Why merge mode?** For specifications, we want ALL perspectives - each agent may identify architectural considerations, edge cases, or requirements that others miss.
 
-**Sectioned Deduplication (optional):** When Stage 1 outputs are very large, enable sectioned deduplication to pre-consolidate content before the chairman:
-```bash
-COUNCIL_DEDUP=true COUNCIL_PRESET=merge-balanced npm run council
-```
-Three evaluators run in parallel, each handling 2 sections (Architecture+Data Model, APIs+User Flows, Security+Deployment). They flag conflicts and note unique insights for the chairman to resolve.
+**Sectioned Deduplication (default):** Three evaluators run in parallel, each handling 2 sections (Architecture+Data Model, APIs+User Flows, Security+Deployment). They flag conflicts and note unique insights for the chairman to resolve. To skip (not recommended): `COUNCIL_SKIP_DEDUP=true`
 
 ### Phase 3: Validation
 
@@ -89,14 +85,12 @@ All inputs are compiled into a comprehensive specification (~100KB+):
 Generate a comprehensive test plan using **merge mode**:
 
 - **Stage 1**: Each agent generates test cases independently
-- **Stage 2**: Optional sectioned deduplication or skipped
+- **Stage 2**: Sectioned deduplication pre-consolidates content (enabled by default)
 - **Stage 3**: Two-pass chairman **merges ALL** unique test cases:
   - **Pass 1**: Categorize and deduplicate tests from all responders
   - **Pass 2**: Refine into structured test plan with priorities
 
 **Why merge mode?** For test plans, we want ALL ideas - each model identifies unique edge cases, security concerns, and scenarios that others miss.
-
-Sectioned deduplication is also available: `COUNCIL_DEDUP=true npm run test-council`
 
 ### Phase 6: Export
 
