@@ -151,6 +151,18 @@ This uses **merge mode** where ALL responses are combined (not ranked):
 
 **Why merge mode for tests?** Unlike specifications where we want the BEST approach, test plans benefit from diverse perspectives. Each model may identify unique edge cases, security concerns, or test scenarios that others miss.
 
+**Sectioned Deduplication (Stage 2 - Default)**
+
+Three evaluators run in parallel to pre-consolidate test cases by category:
+- **Evaluator 1**: unit + integration
+- **Evaluator 2**: e2e + security
+- **Evaluator 3**: performance + edge_cases
+
+Each evaluator deduplicates their test categories, flags conflicts, and notes unique insights. The chairman then receives consolidated input instead of raw Stage 1 responses.
+
+To skip deduplication: `TEST_COUNCIL_SKIP_DEDUP=true`
+To override evaluator tier: `TEST_COUNCIL_DEDUP_EVALUATORS=3:fast`
+
 Output goes to `state/test-plan-output.json`.
 
 ### 6. Export
