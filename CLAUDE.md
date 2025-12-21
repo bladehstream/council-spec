@@ -151,14 +151,34 @@ This uses **merge mode** where ALL responses are combined (not ranked):
 
 **Why merge mode for tests?** Unlike specifications where we want the BEST approach, test plans benefit from diverse perspectives. Each model may identify unique edge cases, security concerns, or test scenarios that others miss.
 
-**Sectioned Deduplication (Stage 2 - Default)**
+**Sectioned Deduplication with Gap Analysis (Stage 2 - Default)**
 
 Three evaluators run in parallel to pre-consolidate test cases by category:
-- **Evaluator 1**: unit + integration
-- **Evaluator 2**: e2e + security
-- **Evaluator 3**: performance + edge_cases
+- **Evaluator 1**: unit + integration (receives must_have features from spec)
+- **Evaluator 2**: e2e + security (receives user_flows + security requirements)
+- **Evaluator 3**: performance + edge_cases (receives performance requirements)
 
-Each evaluator deduplicates their test categories, flags conflicts, and notes unique insights. The chairman then receives consolidated input instead of raw Stage 1 responses.
+Each evaluator:
+1. Receives relevant spec features from `spec-final.json`
+2. Deduplicates only truly identical tests (same scenario, methodology, outcome)
+3. Checks coverage against spec requirements
+4. Outputs `===GAP_FLAGS===` section listing any missing coverage
+
+The chairman then receives consolidated input with `[COVERAGE_GAP]` markers and enforces minimum test counts:
+- Security: 6+ tests (SSRF, XSS, injection, prompt injection, rate limiting, input validation)
+- E2E: 4+ tests
+- Unit: 8+ tests
+- Integration: 4+ tests
+- Performance: 3+ tests
+- Edge cases: 4+ tests
+
+**Multi-tier responder example** (for maximum diversity):
+```bash
+COUNCIL_RESPONDERS='claude:default,gemini:default,codex:default,claude:heavy,gemini:heavy' \
+TEST_COUNCIL_DEDUP_EVALUATORS='3:default' \
+COUNCIL_CHAIRMAN='gemini:heavy/default' \
+npm run test-council
+```
 
 To skip deduplication: `TEST_COUNCIL_SKIP_DEDUP=true`
 To override evaluator tier: `TEST_COUNCIL_DEDUP_EVALUATORS=3:fast`

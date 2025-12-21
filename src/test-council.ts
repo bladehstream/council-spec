@@ -47,26 +47,181 @@ const TEST_DEDUP_SECTION_ASSIGNMENTS = {
   evaluator3: ['performance', 'edge_cases'],
 } as const;
 
+// ============================================================================
+// Spec Feature Extraction for Gap Analysis
+// ============================================================================
+
+interface SpecFeatures {
+  mustHaveFeatures: string[];
+  successCriteria: string[];
+  securityRequirements: string[];
+  performanceRequirements: string[];
+  userFlows: string[];
+}
+
+/**
+ * Load spec-final.json and extract features relevant to test coverage.
+ */
+function loadSpecFeatures(): SpecFeatures | null {
+  const specPath = join(STATE_DIR, 'spec-final.json');
+  if (!existsSync(specPath)) {
+    console.warn('  Warning: spec-final.json not found, gap analysis disabled');
+    return null;
+  }
+
+  try {
+    const spec = JSON.parse(readFileSync(specPath, 'utf-8'));
+
+    // Extract must-have features
+    const mustHaveFeatures = (spec.core_functionality || [])
+      .filter((f: any) => f.priority === 'must_have')
+      .map((f: any) => `${f.feature}: ${f.description}`);
+
+    // Extract success criteria
+    const successCriteria = spec.success_criteria || [];
+
+    // Extract security requirements from threat_model
+    let securityRequirements: string[] = [];
+    if (spec.security) {
+      try {
+        const secObj = typeof spec.security === 'string'
+          ? JSON.parse(spec.security)
+          : spec.security;
+        if (secObj.threat_model) {
+          // Parse threat model - extract specific mitigations
+          securityRequirements = [
+            `Authentication: ${secObj.authentication || 'N/A'}`,
+            `Authorization: ${secObj.authorization || 'N/A'}`,
+            `Data Protection: ${secObj.data_protection || 'N/A'}`,
+            `Threat Mitigations: ${secObj.threat_model || 'N/A'}`,
+          ];
+        }
+      } catch {
+        securityRequirements = [String(spec.security).substring(0, 500)];
+      }
+    }
+
+    // Extract performance requirements from success criteria
+    const performanceRequirements = successCriteria.filter((c: string) =>
+      /second|ms|latency|load|performance|speed/i.test(c)
+    );
+
+    // Extract user flows (may be array or JSON string)
+    let userFlowsArray: any[] = [];
+    if (spec.user_flows) {
+      if (Array.isArray(spec.user_flows)) {
+        userFlowsArray = spec.user_flows;
+      } else if (typeof spec.user_flows === 'string') {
+        try {
+          userFlowsArray = JSON.parse(spec.user_flows);
+        } catch {
+          // If it's not valid JSON, treat as single string
+          userFlowsArray = [spec.user_flows];
+        }
+      }
+    }
+    const userFlows = userFlowsArray.map((f: any) =>
+      typeof f === 'string' ? f : `${f.name || f.flow}: ${f.description || f.steps?.join(' → ') || ''}`
+    );
+
+    return {
+      mustHaveFeatures,
+      successCriteria,
+      securityRequirements,
+      performanceRequirements,
+      userFlows,
+    };
+  } catch (err) {
+    console.warn('  Warning: Failed to parse spec-final.json:', err);
+    return null;
+  }
+}
+
+/**
+ * Map evaluator sections to relevant spec features.
+ */
+function getSpecFeaturesForSections(
+  sections: readonly string[],
+  specFeatures: SpecFeatures
+): string {
+  const features: string[] = [];
+
+  if (sections.includes('unit') || sections.includes('integration')) {
+    features.push('## Must-Have Features (require test coverage)');
+    specFeatures.mustHaveFeatures.forEach(f => features.push(`- ${f}`));
+  }
+
+  if (sections.includes('e2e')) {
+    features.push('## User Flows (require E2E test coverage)');
+    specFeatures.userFlows.forEach(f => features.push(`- ${f}`));
+  }
+
+  if (sections.includes('security')) {
+    features.push('## Security Requirements (CRITICAL - require test coverage)');
+    specFeatures.securityRequirements.forEach(f => features.push(`- ${f}`));
+    features.push('');
+    features.push('IMPORTANT: The following security tests are REQUIRED:');
+    features.push('- SSRF prevention (URL validation)');
+    features.push('- XSS prevention (output encoding)');
+    features.push('- SQL/NoSQL injection prevention');
+    features.push('- LLM prompt injection mitigation');
+    features.push('- Rate limiting');
+    features.push('- Input validation');
+    features.push('- Credential encryption verification');
+  }
+
+  if (sections.includes('performance')) {
+    features.push('## Performance Requirements (require test coverage)');
+    specFeatures.performanceRequirements.forEach(f => features.push(`- ${f}`));
+  }
+
+  if (sections.includes('edge_cases')) {
+    features.push('## Edge Cases to Test');
+    features.push('- Network timeouts and failures');
+    features.push('- Empty/null data handling');
+    features.push('- Concurrent operations');
+    features.push('- Unicode and special characters');
+    features.push('- Boundary conditions');
+    features.push('- LLM hallucination handling');
+  }
+
+  return features.join('\n');
+}
+
 /**
  * Build the deduplication prompt for a test evaluator.
  */
 function buildTestDedupPrompt(
   sections: readonly string[],
-  stage1Responses: Stage1Result[]
+  stage1Responses: Stage1Result[],
+  specFeatures: SpecFeatures | null
 ): string {
   const responsesText = stage1Responses
     .map((r, i) => `===RESPONSE FROM: ${r.agent}===\nMODEL: ${r.agent}\nRESPONSE_INDEX: ${i}\n\n${r.response}\n===END RESPONSE FROM: ${r.agent}===`)
     .join('\n\n');
 
-  return `You are receiving a large number of ${sections.join(' and ')} tests from multiple AI models.
+  // Get spec features relevant to this evaluator's sections
+  const specFeaturesText = specFeatures
+    ? getSpecFeaturesForSections(sections, specFeatures)
+    : '';
 
-Only merge tests that are clearly identical - same scenario, same test methodology, same expected outcome.
+  return `You are a ${sections.join(' and ')} testing expert. You are receiving tests from multiple AI models.
 
+## Your Role
+
+1. DEDUPLICATE: Only merge tests that are clearly identical (same scenario, methodology, and expected outcome)
+2. PRESERVE DISTINCT SCENARIOS: Tests for different attack vectors, edge cases, or features are NOT duplicates
+3. VERIFY COVERAGE: After deduplication, check if all required features have test coverage
+4. FLAG GAPS: Report any missing coverage in the GAP_FLAGS section
+
+${specFeaturesText ? `## Specification Requirements (MUST have test coverage)\n\n${specFeaturesText}\n` : ''}
 ## Input Responses
 
 ${responsesText}
 
 ## Output Format
+
+IMPORTANT: Preserve ALL distinct test scenarios. Only merge truly identical tests.
 
 For each section, list tests with full details:
 
@@ -85,7 +240,12 @@ Coverage: What features/requirements this covers
 [Next test...]
 
 ${sections.length > 1 ? `===SECTION:${sections[1]}===
-[Same format as above]` : ''}`;
+[Same format as above]\n` : ''}
+===GAP_FLAGS===
+List any specification requirements that do NOT have adequate test coverage:
+- GAP: [requirement] - [what test is missing]
+- GAP: [requirement] - [what test is missing]
+(Write "NONE" if all requirements have coverage)`;
 }
 
 /**
@@ -95,9 +255,10 @@ async function runTestDedupEvaluator(
   evaluatorAgent: AgentConfig,
   sections: readonly string[],
   stage1Responses: Stage1Result[],
-  timeoutMs: number
-): Promise<{ agent: string; sections: string[]; response: string }> {
-  const prompt = buildTestDedupPrompt(sections, stage1Responses);
+  timeoutMs: number,
+  specFeatures: SpecFeatures | null
+): Promise<{ agent: string; sections: string[]; response: string; gapFlags: string[] }> {
+  const prompt = buildTestDedupPrompt(sections, stage1Responses, specFeatures);
 
   // Create initial AgentState with the agent config
   const state: AgentState = {
@@ -112,10 +273,22 @@ async function runTestDedupEvaluator(
   // Extract response from stdout
   const response = result.stdout.join('\n');
 
+  // Extract gap flags from response
+  const gapFlags: string[] = [];
+  const gapMatch = response.match(/===GAP_FLAGS===\s*([\s\S]*?)(?====|$)/);
+  if (gapMatch) {
+    const gapSection = gapMatch[1].trim();
+    if (!gapSection.toLowerCase().includes('none')) {
+      const gapLines = gapSection.split('\n').filter(line => line.trim().startsWith('- GAP:') || line.trim().startsWith('GAP:'));
+      gapFlags.push(...gapLines.map(line => line.replace(/^-?\s*GAP:\s*/i, '').trim()));
+    }
+  }
+
   return {
     agent: evaluatorAgent.name,
     sections: [...sections],
     response,
+    gapFlags,
   };
 }
 
@@ -185,7 +358,13 @@ function createTestSectionedDedupHandler(
   // Note: _agents and _timeout are passed by pipeline but we use closure-captured values
   return async (stage1Results: Stage1Result[], _agents?: AgentConfig[], _timeout?: number): Promise<Stage2CustomResult> => {
     console.log('');
-    console.log('  [Stage 2] Sectioned Test Deduplication');
+    console.log('  [Stage 2] Sectioned Test Deduplication with Gap Analysis');
+
+    // Load spec features for gap analysis
+    const specFeatures = loadSpecFeatures();
+    if (specFeatures) {
+      console.log('    Loaded spec features for coverage verification');
+    }
 
     // Parse evaluator spec (e.g., "3:default")
     const evalSpec = parseStageSpec(evaluatorSpec, availableProviders, modelsConfig);
@@ -203,7 +382,7 @@ function createTestSectionedDedupHandler(
     // Run all 3 evaluators in parallel
     console.log(`    Running ${agents.length} evaluators in parallel...`);
     const evalPromises = assignments.map(([_key, sections], i) =>
-      runTestDedupEvaluator(agents[i], sections, stage1Results, timeoutMs)
+      runTestDedupEvaluator(agents[i], sections, stage1Results, timeoutMs, specFeatures)
     );
 
     const evalResults = await Promise.all(evalPromises);
@@ -212,14 +391,20 @@ function createTestSectionedDedupHandler(
     const mergedSections: Record<string, string> = {};
     const allConflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }> = [];
     const allUniqueInsights: Array<{ source: string; insight: string }> = [];
+    const allGapFlags: string[] = [];
 
     for (const result of evalResults) {
       console.log(`    ${result.agent}: processed ${result.sections.join(', ')}`);
+      if (result.gapFlags.length > 0) {
+        console.log(`      ⚠️  Coverage gaps: ${result.gapFlags.length}`);
+        result.gapFlags.forEach(gap => console.log(`         - ${gap}`));
+      }
       const parsed = parseTestDedupResponse(result.response);
 
       Object.assign(mergedSections, parsed.sections);
       allConflicts.push(...parsed.conflicts);
       allUniqueInsights.push(...parsed.uniqueInsights);
+      allGapFlags.push(...result.gapFlags);
     }
 
     // Calculate compression
@@ -230,6 +415,17 @@ function createTestSectionedDedupHandler(
     console.log(`    Deduplication complete: ${originalSize} → ${dedupedSize} chars (${compressionPct}% reduction)`);
     console.log(`    Conflicts found: ${allConflicts.length}`);
     console.log(`    Unique insights: ${allUniqueInsights.length}`);
+    if (allGapFlags.length > 0) {
+      console.log(`    ⚠️  Total coverage gaps: ${allGapFlags.length}`);
+    } else {
+      console.log(`    ✓ No coverage gaps detected`);
+    }
+
+    // Store gap flags in uniqueInsights for now (to pass to chairman)
+    // We prefix with [COVERAGE_GAP] so chairman can identify them
+    allGapFlags.forEach(gap => {
+      allUniqueInsights.push({ source: 'gap_analysis', insight: `[COVERAGE_GAP] ${gap}` });
+    });
 
     return {
       sections: mergedSections,
@@ -644,9 +840,20 @@ async function main() {
     // Use custom prompt mode - this replaces the default merge prompt entirely
     // Placeholders ${RESPONSES} and ${MODEL_LIST} will be substituted by agent-council
     pipelineConfig.stage3.twoPass.pass1IsCustomPrompt = true;
-    pipelineConfig.stage3.twoPass.pass1Format = `You are receiving a large number of tests from multiple AI models: \${MODEL_LIST}
+    pipelineConfig.stage3.twoPass.pass1Format = `You are receiving deduplicated tests from multiple AI models: \${MODEL_LIST}
 
-Only merge tests that are clearly identical - same scenario, same test methodology, same expected outcome.
+## CRITICAL INSTRUCTIONS
+
+1. PRESERVE DISTINCT SCENARIOS: Different attack vectors, edge cases, or test approaches are NOT duplicates
+2. MINIMUM TEST COUNTS:
+   - Security: at least 6 tests (SSRF, XSS, injection, auth, rate limiting, input validation)
+   - E2E: at least 4 tests (main user flows)
+   - Unit: at least 8 tests (core functions)
+   - Integration: at least 4 tests
+   - Performance: at least 3 tests
+   - Edge cases: at least 4 tests
+3. COVERAGE GAP HANDLING: Look for [COVERAGE_GAP] markers - these indicate missing test coverage that MUST be addressed
+4. ONLY MERGE TRULY IDENTICAL TESTS: Same scenario, same methodology, same expected outcome
 
 ## Responses to Process
 
@@ -657,35 +864,37 @@ Only merge tests that are clearly identical - same scenario, same test methodolo
 For each test, note which model(s) contributed it:
 [MODEL: model_name] Test Name - Description
 
-Group tests by category and list them:
+Group tests by category. IMPORTANT: If a category has fewer tests than the minimum, CREATE additional tests to fill gaps.
 
-## UNIT TESTS
+## UNIT TESTS (minimum 8)
 [MODEL: claude:heavy] Test Name - Brief description
 [MODEL: gemini:heavy, claude:heavy] Test Name - (identical test from multiple models)
 ...
 
-## INTEGRATION TESTS
+## INTEGRATION TESTS (minimum 4)
 ...
 
-## E2E TESTS
+## E2E TESTS (minimum 4)
 ...
 
-## SECURITY TESTS
+## SECURITY TESTS (minimum 6 - CRITICAL)
+Must include: SSRF prevention, XSS prevention, SQL/NoSQL injection, LLM prompt injection, Rate limiting, Input validation
 ...
 
-## PERFORMANCE TESTS
+## PERFORMANCE TESTS (minimum 3)
 ...
 
-## EDGE CASE TESTS
+## EDGE CASE TESTS (minimum 4)
 ...
 
-## COVERAGE GAPS
-- Gap 1: Description of missing test scenario
-...
+## COVERAGE GAPS ADDRESSED
+- [COVERAGE_GAP] flags found and addressed: (list)
+- Additional tests created to meet minimums: (list)
 
 ## STATISTICS
 - Total tests listed: (count)
-- Identical tests merged: (count)`;
+- Tests merged: (count)
+- Tests created for gaps: (count)`;
 
     pipelineConfig.stage3.twoPass.pass2Format = `Convert the merged test list from Pass 1 into structured JSON.
 
