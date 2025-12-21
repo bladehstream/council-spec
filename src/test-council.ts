@@ -198,7 +198,8 @@ function createTestSectionedDedupHandler(
   modelsConfig: ReturnType<typeof loadModelsConfig>,
   timeoutMs: number
 ): Stage2CustomHandler {
-  return async (stage1Results: Stage1Result[]): Promise<Stage2CustomResult> => {
+  // Note: _agents and _timeout are passed by pipeline but we use closure-captured values
+  return async (stage1Results: Stage1Result[], _agents?: AgentConfig[], _timeout?: number): Promise<Stage2CustomResult> => {
     console.log('');
     console.log('  [Stage 2] Sectioned Test Deduplication');
 
@@ -266,6 +267,42 @@ function isTestDedupEnabled(): boolean {
  */
 function getTestDedupEvaluatorSpec(): string {
   return process.env.TEST_COUNCIL_DEDUP_EVALUATORS || process.env.COUNCIL_DEDUP_EVALUATORS || '3:default';
+}
+
+/**
+ * Convert dedup result to consolidated markdown for chairman input.
+ */
+function buildConsolidatedMarkdown(dedupResult: Stage2CustomResult): string {
+  const parts: string[] = [];
+
+  // Add deduplicated sections
+  parts.push('# Deduplicated Test Plan Sections\n');
+  for (const [section, content] of Object.entries(dedupResult.sections)) {
+    parts.push(`## ${section.toUpperCase()}\n`);
+    parts.push(content);
+    parts.push('\n');
+  }
+
+  // Add conflicts if any
+  if (dedupResult.conflicts && dedupResult.conflicts.length > 0) {
+    parts.push('\n# Conflicts Requiring Resolution\n');
+    for (const conflict of dedupResult.conflicts) {
+      parts.push(`## ${conflict.topic}\n`);
+      for (const pos of conflict.positions) {
+        parts.push(`- [${pos.agent}]: ${pos.position}\n`);
+      }
+    }
+  }
+
+  // Add unique insights
+  if (dedupResult.uniqueInsights && dedupResult.uniqueInsights.length > 0) {
+    parts.push('\n# Unique Insights (preserve these)\n');
+    for (const insight of dedupResult.uniqueInsights) {
+      parts.push(`- [${insight.source}]: ${insight.insight}\n`);
+    }
+  }
+
+  return parts.join('');
 }
 
 // Extended spec type that matches actual spec-final.json structure
@@ -898,6 +935,17 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
     console.log(`  Original preset: ${savedStage1.preset}`);
     console.log('');
 
+    // Run dedup if enabled (same as full pipeline)
+    let dedupResult: Stage2CustomResult | null = null;
+    if (isTestDedupEnabled() && pipelineConfig.stage2?.customHandler) {
+      console.log('Running Stage 2 deduplication...');
+      dedupResult = await pipelineConfig.stage2.customHandler(
+        stage1Results,
+        pipelineConfig.stage2.agents || [],
+        timeoutMs
+      );
+    }
+
     // Build two-pass config
     const twoPassConfig: TwoPassConfig = pipelineConfig.stage3.twoPass || {
       enabled: true,
@@ -918,10 +966,25 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
     console.log(`  Two-pass: Pass 1 (${twoPassConfig.pass1Tier}) → Pass 2 (${twoPassConfig.pass2Tier})`);
     console.log('');
 
+    // Prepare chairman input - use dedup output if available
+    let chairmanInput: Stage1Result[];
+    if (dedupResult) {
+      // Convert dedup sections to consolidated input for chairman
+      const consolidatedMarkdown = buildConsolidatedMarkdown(dedupResult);
+      chairmanInput = [{
+        agent: 'dedup-consolidated',
+        response: consolidatedMarkdown,
+      }];
+      console.log(`  Using deduplicated input (${consolidatedMarkdown.length} chars)`);
+    } else {
+      chairmanInput = stage1Results;
+      console.log(`  Using raw Stage 1 input (${stage1Results.reduce((sum, r) => sum + r.response.length, 0)} chars)`);
+    }
+
     // Run only the chairman merge
     const twoPassResult = await runTwoPassMergeChairman(
       testPrompt,
-      stage1Results,
+      chairmanInput,
       pipelineConfig.stage3.chairman,
       twoPassConfig,
       timeoutMs,
