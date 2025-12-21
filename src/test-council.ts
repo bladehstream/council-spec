@@ -58,50 +58,34 @@ function buildTestDedupPrompt(
     .map((r, i) => `===RESPONSE FROM: ${r.agent}===\nMODEL: ${r.agent}\nRESPONSE_INDEX: ${i}\n\n${r.response}\n===END RESPONSE FROM: ${r.agent}===`)
     .join('\n\n');
 
-  return `You are a test plan deduplication specialist focusing on: ${sections.join(', ')}.
+  return `You are receiving a large number of ${sections.join(' and ')} tests from multiple AI models.
 
-## Your Task
-
-Review the test plan responses from multiple AI models and consolidate the ${sections.join(' and ')} tests.
+Only merge tests that are clearly identical - same scenario, same test methodology, same expected outcome.
 
 ## Input Responses
 
 ${responsesText}
 
-## Instructions
-
-1. **Extract** all tests for your assigned categories: ${sections.join(', ')}
-2. **Deduplicate** similar or identical tests, keeping the most detailed version
-3. **Flag conflicts** where models disagree on approach, priority, or expected results
-4. **Note unique insights** - tests that only one model suggested
-
 ## Output Format
 
-For each of your sections (${sections.join(', ')}), output:
+For each section, list tests with full details:
 
 ===SECTION:${sections[0]}===
-[List of deduplicated tests with attribution]
-- [MODEL: source] Test ID - Name: Description
-- [MODEL: source1, source2] Test ID - Name: Description (merged similar tests)
+[MODEL: source_model(s)]
+ID: TEST-XXX
+Name: Test name
+Description: What this tests
+Priority: critical/high/medium/low
+Steps:
+1. Step one
+2. Step two
+Expected Result: What should happen
+Coverage: What features/requirements this covers
 
-===CONFLICTS:${sections[0]}===
-- Topic: What the conflict is about
-  - [MODEL: source1] Position 1
-  - [MODEL: source2] Position 2
-
-===UNIQUE_INSIGHTS:${sections[0]}===
-- [MODEL: source] Unique test or approach only this model suggested
+[Next test...]
 
 ${sections.length > 1 ? `===SECTION:${sections[1]}===
-[Same format as above]
-
-===CONFLICTS:${sections[1]}===
-[Same format]
-
-===UNIQUE_INSIGHTS:${sections[1]}===
-[Same format]` : ''}
-
-Be thorough in deduplication but preserve ALL unique test ideas.`;
+[Same format as above]` : ''}`;
 }
 
 /**
@@ -657,25 +641,27 @@ async function main() {
   // Pass 1: Merge and categorize tests from all responders
   // Pass 2: Produce final structured JSON with attribution
   if (pipelineConfig.stage3.twoPass) {
-    pipelineConfig.stage3.twoPass.pass1Format = `You are merging test plans from multiple AI models.
-Your task is to combine all tests into a single comprehensive list.
+    // Use custom prompt mode - this replaces the default merge prompt entirely
+    // Placeholders ${RESPONSES} and ${MODEL_LIST} will be substituted by agent-council
+    pipelineConfig.stage3.twoPass.pass1IsCustomPrompt = true;
+    pipelineConfig.stage3.twoPass.pass1Format = `You are receiving a large number of tests from multiple AI models: \${MODEL_LIST}
 
-The models providing tests are: ${modelsUsed}
+Only merge tests that are clearly identical - same scenario, same test methodology, same expected outcome.
 
-For each test, note which model(s) contributed it using this format:
+## Responses to Process
+
+\${RESPONSES}
+
+## Instructions
+
+For each test, note which model(s) contributed it:
 [MODEL: model_name] Test Name - Description
 
-Instructions:
-1. List ALL unique tests from all responses
-2. For duplicate/similar tests, keep ONE version and note ALL models that suggested it
-3. Group tests by category (unit, integration, e2e, security, performance, edge_cases)
-4. Identify any gaps - important test scenarios not covered by any model
-
-Output format (plain text, NOT JSON):
+Group tests by category and list them:
 
 ## UNIT TESTS
 [MODEL: claude:heavy] Test Name - Brief description
-[MODEL: gemini:heavy, claude:heavy] Test Name - Brief description (similar tests merged)
+[MODEL: gemini:heavy, claude:heavy] Test Name - (identical test from multiple models)
 ...
 
 ## INTEGRATION TESTS
@@ -695,10 +681,11 @@ Output format (plain text, NOT JSON):
 
 ## COVERAGE GAPS
 - Gap 1: Description of missing test scenario
-- Gap 2: ...
+...
 
-## MERGE NOTES
-Brief notes on deduplication decisions made`;
+## STATISTICS
+- Total tests listed: (count)
+- Identical tests merged: (count)`;
 
     pipelineConfig.stage3.twoPass.pass2Format = `Convert the merged test list from Pass 1 into structured JSON.
 
@@ -729,9 +716,9 @@ JSON structure:
 }`;
   }
 
-  pipelineConfig.stage3.outputFormat = `Output the merged test plan as JSON. Combine all tests from all responses.
-Deduplicate similar tests, keeping the most detailed version.
-Include ALL unique test ideas from every response.
+  pipelineConfig.stage3.outputFormat = `You are receiving a large number of tests from multiple AI models.
+
+Only merge tests that are clearly identical - same scenario, same test methodology, same expected outcome.
 
 ## RESPONSE FORMAT
 
@@ -930,9 +917,13 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
       summary: r.summary,
     }));
 
+    // Extract actual model names from saved responses (not current config!)
+    const actualModelsUsed = stage1Results.map(r => r.agent).join(', ');
+
     console.log(`  Loaded ${stage1Results.length} responses from: state/test-council-stage1.json`);
     console.log(`  Original timestamp: ${savedStage1.timestamp}`);
     console.log(`  Original preset: ${savedStage1.preset}`);
+    console.log(`  Models in saved responses: ${actualModelsUsed}`);
     console.log('');
 
     // Run dedup if enabled (same as full pipeline)
@@ -953,12 +944,15 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
       pass2Tier: 'default',
     };
 
-    // Add custom formats if configured
+    // Add custom formats if configured, but fix Pass 2 to use actual model names
     if (pipelineConfig.stage3.twoPass?.pass1Format) {
       twoPassConfig.pass1Format = pipelineConfig.stage3.twoPass.pass1Format;
+      twoPassConfig.pass1IsCustomPrompt = pipelineConfig.stage3.twoPass.pass1IsCustomPrompt;
     }
     if (pipelineConfig.stage3.twoPass?.pass2Format) {
-      twoPassConfig.pass2Format = pipelineConfig.stage3.twoPass.pass2Format;
+      // Replace the model list in Pass 2 format with actual models from saved responses
+      twoPassConfig.pass2Format = pipelineConfig.stage3.twoPass.pass2Format
+        .replace(modelsUsed, actualModelsUsed);
     }
 
     console.log(`Running chairman only (skipping Stage 1)...`);
