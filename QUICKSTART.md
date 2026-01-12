@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get from idea to specification in 4 phases.
+Get from idea to specification and test plan in 6 phases.
 
 ## Prerequisites
 
@@ -99,6 +99,87 @@ The assistant compiles everything into `state/spec-final.json`:
 }
 ```
 
+### Step 6: Test Council
+
+Generate a comprehensive test plan from the finalized spec:
+
+```bash
+COUNCIL_PRESET=merge-balanced npm run test-council
+```
+
+This runs the test council in **merge mode**:
+1. **Stage 1**: Multiple agents generate test cases independently
+2. **Stage 2**: Sectioned deduplication consolidates by test category
+3. **Stage 3**: Chairman merges ALL unique test cases
+
+**Output:** `state/test-plan-output.json`
+
+Categories covered:
+- Unit tests
+- Integration tests
+- End-to-end tests
+- Security tests
+- Performance tests
+- Edge cases
+
+### Step 7: Export
+
+Convert JSON artifacts to human-readable markdown:
+
+```bash
+npm run export:all
+```
+
+This creates:
+- `state/spec-final.md` - Human-readable specification
+- `state/test-plan.md` - Human-readable test plan
+
+These are deterministic template-based conversions (no AI calls).
+
+## Phased Workflow (Alternative)
+
+For complex projects, use the phased workflow to separate features from architecture:
+
+```bash
+# Step 1: Interview (same as integrated)
+
+# Step 2: Features phase - focus on WHAT
+npm run phase -- --phase features --output state/features-output.json
+
+# Step 3: Architecture phase - focus on HOW
+npm run phase -- --phase architecture \
+  --input state/features-output.json \
+  --output state/architecture-output.json
+
+# Step 4: Spec phase - synthesize both
+npm run phase -- --phase spec \
+  --input state/features-output.json \
+  --input state/architecture-output.json \
+  --output state/spec-final.json
+
+# Step 5: Tests phase
+npm run phase -- --phase tests \
+  --input state/spec-final.json \
+  --output state/test-plan-output.json
+
+# Step 6: Export (same as integrated)
+npm run export:all
+```
+
+### Critique Loop
+
+Add `--critique` to enable adversarial critique that improves output quality:
+
+```bash
+npm run phase -- --phase features --critique
+```
+
+Add `--confirm` to require human approval before fixing each issue:
+
+```bash
+npm run phase -- --phase architecture --critique --confirm
+```
+
 ## Resuming After Interruption
 
 If your AI assistant session ends mid-workflow:
@@ -109,9 +190,21 @@ If your AI assistant session ends mid-workflow:
    ```
 
 2. Resume based on what exists:
+
+   **Integrated Workflow:**
    - Only `interview-output.json` → Run `npm run council`
-   - Both interview + council output → Continue validation phase
-   - All three files → Workflow complete
+   - Interview + council output → Continue validation phase
+   - Interview + council + decisions → Run `npm run finalize`
+   - spec-final.json exists → Run `npm run test-council`
+   - spec-final + test-plan-output → Run `npm run export:all`
+   - All files including markdown → Workflow complete
+
+   **Phased Workflow:**
+   - Only `interview-output.json` → Run features phase
+   - Interview + features output → Run architecture phase
+   - Interview + features + architecture → Run spec phase
+   - spec-final.json exists → Run tests phase
+   - All JSON files → Run `npm run export:all`
 
 3. Read the latest conversation log for context:
    ```bash
@@ -161,8 +254,11 @@ To disable verbose logging, set `DEBUG_LOGGING_ENABLED = false` in `src/council.
 
 ## Next Steps
 
-After generating your spec:
-1. Review `state/spec-final.json`
-2. Use it as input for implementation planning
-3. Share with your team for feedback
-4. Iterate by running the workflow again with refinements
+After generating your spec and test plan:
+1. Review `state/spec-final.md` and `state/test-plan.md`
+2. Use the spec as input for implementation planning
+3. Use the test plan to guide QA and testing efforts
+4. Share with your team for feedback
+5. Iterate by running the workflow again with refinements
+
+For complex projects, consider using the phased workflow to catch feature-architecture conflicts early.

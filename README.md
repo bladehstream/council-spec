@@ -14,7 +14,7 @@ Council Spec guides you through a structured process to transform project ideas 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        SPEC WORKFLOW                            │
+│                    INTEGRATED WORKFLOW                          │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  1. INTERVIEW        Gather requirements conversationally       │
@@ -33,6 +33,33 @@ Council Spec guides you through a structured process to transform project ideas 
 │  5. TEST COUNCIL     Generate test plan (MERGE mode)            │
 │        ↓             All agent ideas combined by chairman       │
 │                      → state/test-plan-output.json              │
+│                                                                 │
+│  6. EXPORT           Convert to human-readable markdown         │
+│                      → state/spec-final.md                      │
+│                      → state/test-plan.md                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     PHASED WORKFLOW (Alternative)               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. INTERVIEW        Gather requirements conversationally       │
+│        ↓             → state/interview-output.json              │
+│                                                                 │
+│  2. FEATURES         WHAT the system does (user perspective)    │
+│        ↓             User stories, acceptance criteria only     │
+│                      → state/features-output.json               │
+│                                                                 │
+│  3. ARCHITECTURE     HOW to implement (technical design)        │
+│        ↓             Components, APIs, data model               │
+│                      → state/architecture-output.json           │
+│                                                                 │
+│  4. SPEC             Synthesize features + architecture         │
+│        ↓             → state/spec-final.json                    │
+│                                                                 │
+│  5. TESTS            Generate test plan from spec               │
+│        ↓             → state/test-plan-output.json              │
 │                                                                 │
 │  6. EXPORT           Convert to human-readable markdown         │
 │                      → state/spec-final.md                      │
@@ -100,6 +127,74 @@ Convert JSON artifacts to human-readable markdown:
 
 These are deterministic template-based conversions (no AI calls).
 
+## Phased Workflow (Alternative)
+
+The phased workflow separates **features** (WHAT) from **architecture** (HOW) to prevent:
+- Architecture constraining features: "Real-time sync is hard, so let's not ask for it"
+- Features assuming architecture: "We need a WebSocket server" (that's architecture, not a feature)
+
+### Why Use Phased Workflow?
+
+| Integrated Workflow | Phased Workflow |
+|---------------------|-----------------|
+| Faster (fewer steps) | More thorough (explicit separation) |
+| Good for small projects | Better for complex projects |
+| Single council handles all | Each phase has focused prompts |
+| May miss feature-architecture conflicts | Catches conflicts early |
+
+### Phased Workflow Steps
+
+```bash
+# 1. Interview (same as integrated)
+# Write state/interview-output.json
+
+# 2. Features phase - focus on WHAT
+npm run phase -- --phase features --output state/features-output.json
+
+# 3. Architecture phase - focus on HOW
+npm run phase -- --phase architecture \
+  --input state/interview-output.json \
+  --input state/features-output.json \
+  --output state/architecture-output.json
+
+# 4. Spec phase - synthesize both
+npm run phase -- --phase spec \
+  --input state/interview-output.json \
+  --input state/features-output.json \
+  --input state/architecture-output.json \
+  --output state/spec-final.json
+
+# 5. Tests phase
+npm run phase -- --phase tests \
+  --input state/spec-final.json \
+  --output state/test-plan-output.json
+
+# 6. Export (same as integrated)
+npm run export:all
+```
+
+### Critique Loop (Optional)
+
+Enable adversarial critique to improve output quality:
+
+```bash
+npm run phase -- --phase features --critique --output state/features-output.json
+```
+
+With `--critique`:
+1. **Draft**: Council generates initial output
+2. **Critique**: Responders identify blocking issues and advisory concerns
+3. **Resolve**: Chairman fixes blocking issues automatically
+4. **Advisory**: Non-blocking concerns logged for human review
+
+Add `--confirm` to require human approval before fixing each blocking issue:
+
+```bash
+npm run phase -- --phase architecture --critique --confirm \
+  --input state/features-output.json \
+  --output state/architecture-output.json
+```
+
 ## Installation
 
 ```bash
@@ -129,6 +224,8 @@ See [QUICKSTART.md](QUICKSTART.md) for a complete walkthrough.
 # Initialize a new project
 npm run init my-project-name
 
+# === INTEGRATED WORKFLOW ===
+
 # Run the spec council with a preset (merge mode)
 COUNCIL_PRESET=merge-fast npm run council      # Quick iteration
 COUNCIL_PRESET=merge-balanced npm run council  # Default quality (recommended)
@@ -149,6 +246,18 @@ COUNCIL_PRESET=merge-thorough npm run test-council
 npm run export:spec   # Spec only
 npm run export:tests  # Test plan only
 npm run export:all    # Both
+
+# === PHASED WORKFLOW ===
+
+# Run individual phases (see "Phased Workflow" section for details)
+npm run phase -- --phase features --output state/features-output.json
+npm run phase -- --phase architecture --input state/features-output.json
+npm run phase -- --phase spec --input state/features-output.json --input state/architecture-output.json
+npm run phase -- --phase tests --input state/spec-final.json
+
+# With critique loop
+npm run phase -- --phase features --critique
+npm run phase -- --phase architecture --critique --confirm  # Human confirmation
 ```
 
 ## Council Presets
@@ -234,29 +343,33 @@ The `config.json` provides defaults, but **presets override these**:
 ```
 council-spec/
 ├── src/
-│   ├── council.ts       # Spec council runner (merge mode)
-│   ├── test-council.ts  # Test council runner (merge mode)
-│   ├── finalize.ts      # Final spec compilation
-│   ├── export-spec.ts   # Spec JSON → markdown conversion
-│   ├── export-tests.ts  # Test plan JSON → markdown conversion
+│   ├── council.ts        # Spec council runner (merge mode)
+│   ├── test-council.ts   # Test council runner (merge mode)
+│   ├── phase.ts          # Phased workflow orchestrator
+│   ├── phase-prompts.ts  # Phase-specific prompt templates
+│   ├── finalize.ts       # Final spec compilation
+│   ├── export-spec.ts    # Spec JSON → markdown conversion
+│   ├── export-tests.ts   # Test plan JSON → markdown conversion
 │   ├── markdown-utils.ts # Shared markdown formatting utilities
-│   ├── validate.ts      # Validation helper
-│   ├── init.ts          # Project initialization
-│   ├── types.ts         # TypeScript interfaces
-│   └── utils.ts         # Utility functions
+│   ├── validate.ts       # Validation helper
+│   ├── init.ts           # Project initialization
+│   ├── types.ts          # TypeScript interfaces
+│   └── utils.ts          # Utility functions
 ├── state/
-│   ├── conversations/   # Timestamped audit logs
-│   ├── checkpoints/     # Pipeline checkpoints for resumption
-│   └── *.json, *.md     # Workflow state files
-├── schemas/             # JSON schemas for state files
+│   ├── conversations/    # Timestamped audit logs
+│   ├── checkpoints/      # Pipeline checkpoints for resumption
+│   └── *.json, *.md      # Workflow state files
+├── schemas/              # JSON schemas for state files
 ├── prompts/
-│   └── workflow.md      # Interview & validation instructions
-├── config.json          # Council configuration
-├── CLAUDE.md            # AI assistant operating constraints
+│   └── workflow.md       # Interview & validation instructions
+├── config.json           # Council configuration
+├── CLAUDE.md             # AI assistant operating constraints
 └── README.md
 ```
 
 ## State Files
+
+### Integrated Workflow
 
 | File | Created By | Contents |
 |------|-----------|----------|
@@ -267,6 +380,14 @@ council-spec/
 | `spec-final.md` | Export phase | Human-readable specification |
 | `test-plan-output.json` | Test Council phase | Comprehensive test plan |
 | `test-plan.md` | Export phase | Human-readable test plan |
+
+### Phased Workflow (Additional Files)
+
+| File | Created By | Contents |
+|------|-----------|----------|
+| `features-output.json` | Features phase | User stories, acceptance criteria |
+| `architecture-output.json` | Architecture phase | Components, APIs, data model |
+| `*-advisory.json` | Critique loop | Non-blocking concerns for review |
 
 ### Final Spec Structure
 

@@ -45,9 +45,30 @@ Gather requirements through conversation. You must collect:
 - Summarize what you've heard periodically
 - Note any open questions you couldn't resolve
 
-### Council Configuration
+### Workflow Choice
 
 Before completing the interview, ask:
+
+> "Would you prefer the **integrated workflow** (faster, single council) or the **phased workflow** (separates features from architecture, better for complex projects)?"
+
+**Integrated Workflow** (default):
+- Single spec council handles all analysis
+- Faster for simpler projects
+- Run with: `npm run council`
+
+**Phased Workflow**:
+- Separates features (WHAT) from architecture (HOW)
+- Prevents architecture from constraining feature requests
+- Better for complex projects
+- Optional critique loop for quality
+
+If they choose **phased workflow**, also ask about critique:
+
+> "Would you like to enable the **critique loop**? This adds adversarial review that catches issues early, but takes longer."
+
+### Council Configuration
+
+Then ask:
 
 > "Would you like to customize the council structure?"
 
@@ -70,7 +91,9 @@ Write their preferences to `state/council-preferences.json`:
 {
   "responders": "3:default",
   "chairman": "gemini:heavy",
-  "timeout_seconds": 420
+  "timeout_seconds": 420,
+  "use_phased_workflow": false,
+  "critique_enabled": false
 }
 ```
 
@@ -160,4 +183,126 @@ This compiles the final specification from interview + council + decisions.
 
 **IMPORTANT**: Do NOT manually write `state/spec-final.json`. Always use the finalize command to ensure consistent output format.
 
-3. Announce completion and offer to explain any part of the spec.
+3. Announce completion and proceed to Test Council.
+
+## Phase 5: Test Council
+
+Generate a comprehensive test plan from the finalized specification:
+
+```bash
+COUNCIL_PRESET=merge-balanced npm run test-council
+```
+
+This runs automatically. Wait for it to complete (~3-5 minutes).
+
+**Output:** `state/test-plan-output.json`
+
+The test plan includes:
+- Unit tests
+- Integration tests
+- End-to-end tests
+- Security tests
+- Performance tests
+- Edge cases
+
+Review the test plan with the user and ask if they want to adjust priorities or add specific test scenarios.
+
+## Phase 6: Export
+
+Convert JSON artifacts to human-readable markdown:
+
+```bash
+npm run export:all
+```
+
+This creates:
+- `state/spec-final.md` - Human-readable specification
+- `state/test-plan.md` - Human-readable test plan
+
+These are deterministic template-based conversions (no AI calls).
+
+Announce workflow completion and provide the user with paths to all final artifacts:
+- `state/spec-final.json` / `state/spec-final.md`
+- `state/test-plan-output.json` / `state/test-plan.md`
+
+## Phased Workflow (Alternative)
+
+If the user chose the phased workflow during interview:
+
+### Features Phase
+
+Run:
+```bash
+npm run phase -- --phase features --output state/features-output.json
+```
+
+With critique:
+```bash
+npm run phase -- --phase features --critique --output state/features-output.json
+```
+
+Review the features output with the user. This focuses on WHAT the system does:
+- User stories (As a..., I want..., So that...)
+- Acceptance criteria
+- Feature priorities
+- No architecture or technology choices
+
+### Architecture Phase
+
+Run:
+```bash
+npm run phase -- --phase architecture \
+  --input state/features-output.json \
+  --output state/architecture-output.json
+```
+
+With critique and human confirmation:
+```bash
+npm run phase -- --phase architecture --critique --confirm \
+  --input state/features-output.json \
+  --output state/architecture-output.json
+```
+
+Review the architecture output with the user. This focuses on HOW to implement:
+- Component design
+- Technology choices
+- API contracts
+- Data model
+- Security architecture
+
+### Spec Phase
+
+Run:
+```bash
+npm run phase -- --phase spec \
+  --input state/features-output.json \
+  --input state/architecture-output.json \
+  --output state/spec-final.json
+```
+
+This synthesizes features and architecture into the final specification.
+
+### Tests Phase
+
+Run:
+```bash
+npm run phase -- --phase tests \
+  --input state/spec-final.json \
+  --output state/test-plan-output.json
+```
+
+### Export Phase
+
+Same as integrated workflow:
+```bash
+npm run export:all
+```
+
+### Advisory Concerns
+
+If critique was enabled, non-blocking advisory concerns are saved to `*-advisory.json` files. Review these with the user:
+- Alternative approaches worth considering
+- Potential risks identified
+- Clarifications that might improve the spec
+
+These don't require immediate action but should be logged for future reference.
