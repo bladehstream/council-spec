@@ -260,3 +260,208 @@ export interface ClarificationReport {
   needs_clarification: number;
   items: ClarificationItem[];
 }
+
+// ============================================================================
+// Phase Split Types
+// ============================================================================
+
+/**
+ * Available phases for the phased workflow.
+ * - features: Gather feature requirements only (no architecture)
+ * - architecture: Design architecture to support features
+ * - spec: Synthesize detailed specification from features + architecture
+ * - tests: Generate test plan from specification
+ * - all: Run integrated workflow (backward compatible)
+ */
+export type PhaseName = 'features' | 'architecture' | 'spec' | 'tests' | 'all';
+
+/**
+ * CLI options for the phase command.
+ */
+export interface PhaseCliOptions {
+  /** Which phase to run */
+  phase: PhaseName;
+  /** Input files from previous phases (can be specified multiple times) */
+  input?: string[];
+  /** Output file for this phase's artifact */
+  output?: string;
+  /** Enable critique loop for this phase */
+  critique?: boolean;
+  /** Enable human confirmation for critique decisions (requires critique) */
+  confirm?: boolean;
+}
+
+/**
+ * Per-phase configuration in config.json.
+ */
+export interface PhaseConfig {
+  /** Enable critique loop for this phase */
+  critique?: boolean;
+  /** Enable human confirmation for critique decisions */
+  confirm?: boolean;
+  /** Override responders for this phase */
+  responders?: string;
+  /** Override chairman for this phase */
+  chairman?: string;
+}
+
+/**
+ * Extended config with phase settings.
+ */
+export interface ExtendedConfig extends Config {
+  phases?: {
+    features?: PhaseConfig;
+    architecture?: PhaseConfig;
+    spec?: PhaseConfig;
+    tests?: PhaseConfig;
+  };
+}
+
+/**
+ * Output from the features phase.
+ * Focuses on WHAT the system does, not HOW.
+ */
+export interface FeaturesPhaseOutput {
+  metadata: {
+    phase: 'features';
+    generated_at: string;
+    interview_hash: string;
+    preset_used: string;
+  };
+  /** Core features with user stories and acceptance criteria */
+  features: Array<{
+    id: string;
+    name: string;
+    description: string;
+    priority: 'must_have' | 'should_have' | 'nice_to_have';
+    user_stories: Array<{
+      as: string;
+      want: string;
+      so_that: string;
+    }>;
+    acceptance_criteria: string[];
+    /** Which spec section this relates to */
+    category?: string;
+  }>;
+  /** Users and their goals */
+  users: Array<{
+    name: string;
+    description: string;
+    goals: string[];
+  }>;
+  /** Constraints that don't involve architecture */
+  constraints: {
+    timeline?: string;
+    budget?: string;
+    compliance?: string[];
+    non_functional?: string[];
+  };
+  /** Questions that need human answers */
+  ambiguities: Ambiguity[];
+  /** Advisory concerns from critique (if enabled) */
+  advisory?: AdvisoryConcern[];
+}
+
+/**
+ * Output from the architecture phase.
+ * Focuses on HOW to implement the features.
+ */
+export interface ArchitecturePhaseOutput {
+  metadata: {
+    phase: 'architecture';
+    generated_at: string;
+    features_hash: string;
+    preset_used: string;
+  };
+  /** High-level system design */
+  architecture: {
+    overview: string;
+    components: Array<{
+      name: string;
+      purpose: string;
+      technology: string;
+      interfaces: string[];
+    }>;
+    communication_patterns: string;
+    diagrams?: string;
+  };
+  /** Data storage design */
+  data_model: {
+    entities: Array<{
+      name: string;
+      description: string;
+      key_attributes: string[];
+      relationships: string[];
+    }>;
+    storage_recommendations: string;
+    data_flow: string;
+  };
+  /** API design */
+  api_contracts: {
+    style: string;
+    endpoints: Array<{
+      method: string;
+      path: string;
+      purpose: string;
+      request_shape?: string;
+      response_shape?: string;
+    }>;
+    authentication: string;
+  };
+  /** Security architecture */
+  security: {
+    authentication: string;
+    authorization: string;
+    data_protection: string;
+    threat_model: string;
+  };
+  /** Deployment architecture */
+  deployment: {
+    infrastructure: string;
+    scaling_strategy: string;
+    monitoring: string;
+    ci_cd: string;
+  };
+  /** Technology choices with rationale */
+  technology_decisions: Array<{
+    decision: string;
+    rationale: string;
+    alternatives_considered: string[];
+    /** Which feature(s) this decision supports */
+    supports_features: string[];
+  }>;
+  /** Questions that need human answers */
+  ambiguities: Ambiguity[];
+  /** Advisory concerns from critique (if enabled) */
+  advisory?: AdvisoryConcern[];
+}
+
+/**
+ * An advisory concern raised during critique.
+ * Unlike blocking critiques, these are logged for human review.
+ */
+export interface AdvisoryConcern {
+  id: string;
+  /** Which model raised this concern */
+  source: string;
+  /** Category of concern */
+  category: 'risk' | 'alternative' | 'clarification' | 'improvement';
+  /** The concern description */
+  description: string;
+  /** Suggested action */
+  suggestion?: string;
+  /** Severity */
+  severity: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Phase execution result.
+ */
+export interface PhaseResult {
+  phase: PhaseName;
+  success: boolean;
+  output_file?: string;
+  advisory_file?: string;
+  error?: string;
+  duration_ms: number;
+}

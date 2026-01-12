@@ -13,7 +13,10 @@ This project generates complete software specifications and test plans through A
 ### Allowed Actions
 - **Create/modify files in `state/`**:
   - `state/interview-output.json` - Interview results
-  - `state/spec-council-output.json` - Spec council results (created by `npm run council`)
+  - `state/spec-council-output.json` - Spec council results (created by `npm run council` or `npm run phase`)
+  - `state/phase-features-output.json` - Features phase output (created by `npm run phase`)
+  - `state/phase-architecture-output.json` - Architecture phase output (created by `npm run phase`)
+  - `state/*.advisory.md` - Advisory concerns from critique (created by `npm run phase` with `--critique`)
   - `state/decisions.json` - Validation decisions (see schemas/decisions.json)
   - `state/spec-final.json` - Final specification (created by `npm run finalize`)
   - `state/spec-final.md` - Human-readable spec (created by `npm run export:spec`)
@@ -23,7 +26,8 @@ This project generates complete software specifications and test plans through A
   - `state/conversations/*.log` - Conversation logs
 - **Run commands**:
   - `npm run init <project-id>` - Initialize a new project
-  - `npm run council` - Launch the spec council (merge mode)
+  - `npm run council` - Launch the spec council (merge mode, integrated workflow)
+  - `npm run phase -- [options]` - Launch phased workflow (features → architecture → spec)
   - `npm run validate [command]` - Validation helper (see below)
   - `npm run finalize` - Compile final specification from interview + council + decisions
   - `npm run test-council` - Generate test plan from spec (merge mode)
@@ -90,6 +94,74 @@ To skip deduplication (not recommended): `COUNCIL_SKIP_DEDUP=true`
 **Chairman defaults to `gemini:heavy`** for largest context window. Fallback chain: `gemini:heavy → codex:heavy → claude:heavy → fail`.
 
 Output goes to `state/spec-council-output.json`.
+
+### 2b. Phased Workflow (Alternative)
+
+For complex or enterprise projects, use the phased workflow to separate feature gathering from architecture design:
+
+```bash
+# Run each phase separately with critique on high-stakes decisions
+npm run phase -- --phase features --output state/features.json
+npm run phase -- --phase architecture --input state/features.json --critique --confirm
+npm run phase -- --phase spec --input state/features.json --input state/architecture.json
+
+# Or run all phases sequentially
+npm run phase -- --phase all --critique
+```
+
+**Why separate features from architecture?**
+
+When features and architecture are gathered together:
+- Architecture can constrain features: "Real-time sync is hard, so let's not ask for it"
+- Features can assume architecture: "We need a WebSocket server" (that's architecture, not a feature)
+
+Separating them ensures:
+- Features describe WHAT the system does from the user's perspective
+- Architecture describes HOW to achieve those features
+
+**Phase Details:**
+
+1. **Features Phase**: Extracts feature requirements, user stories, and acceptance criteria. Explicitly excludes technology choices or implementation details.
+   - Output: `state/phase-features-output.json`
+
+2. **Architecture Phase**: Designs system architecture to support the features. References specific features when justifying technology decisions.
+   - Input: Features output
+   - Output: `state/phase-architecture-output.json`
+
+3. **Spec Phase**: Synthesizes features and architecture into a detailed specification with traceability.
+   - Input: Features + Architecture outputs
+   - Output: `state/spec-council-output.json` (same format as integrated workflow)
+
+**Critique Loop Integration:**
+
+Use `--critique` to enable adversarial review after each phase:
+- BLOCKING critiques are auto-fixed before proceeding
+- ADVISORY critiques are logged to `*.advisory.md` for human review
+
+Use `--confirm` (requires `--critique`) to pause before applying blocking fixes.
+
+**When to use which workflow:**
+
+| Scenario | Recommended Workflow |
+|----------|---------------------|
+| MVP/Prototype | Integrated (`npm run council`) |
+| Enterprise system | Phased with critique |
+| Regulated industry | Phased with critique + confirm |
+| Quick iteration | Integrated |
+| New team unfamiliar with domain | Phased (clearer separation) |
+
+**Per-phase configuration in config.json:**
+
+```json
+{
+  "phases": {
+    "features": { "critique": false },
+    "architecture": { "critique": true, "confirm": true },
+    "spec": { "critique": true, "confirm": false },
+    "tests": { "critique": false }
+  }
+}
+```
 
 ### 3. Validation
 Review council output. Present ambiguities to user. Record decisions in `state/decisions.json`:
@@ -307,12 +379,19 @@ Check state:
 ls -la state/
 ```
 
+**Integrated Workflow:**
 - Only `interview-output.json` exists → Run `npm run council`
 - Interview + council exist → Continue validation, then `npm run finalize`
 - Interview + council + decisions exist → Run `npm run finalize`
 - spec-final.json exists → Run `npm run test-council`
 - spec-final.json + test-plan-output.json exist → Run `npm run export:all`
 - All JSON + markdown files exist → Workflow complete
+
+**Phased Workflow:**
+- Only `interview-output.json` exists → Run `npm run phase -- --phase features`
+- Interview + features exist → Run `npm run phase -- --phase architecture --input state/phase-features-output.json`
+- Interview + features + architecture exist → Run `npm run phase -- --phase spec --input state/phase-features-output.json --input state/phase-architecture-output.json`
+- spec-council-output.json exists → Continue validation, then `npm run finalize`
 
 ## Conversation Logging
 

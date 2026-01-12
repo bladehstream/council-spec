@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "council": "node dist/council.js",
+    "phase": "node dist/phase.js",
     "test-council": "node dist/test-council.js",
     "test-finalize": "node dist/test-finalize.js",
     "finalize": "node dist/finalize.js",
