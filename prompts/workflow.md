@@ -45,6 +45,34 @@ Gather requirements through conversation. You must collect:
 - Summarize what you've heard periodically
 - Note any open questions you couldn't resolve
 
+### Using AskUserQuestion Tool
+
+For key decision points, use the `AskUserQuestion` tool to present clear options. This provides a better user experience than free-form questions.
+
+**When to use AskUserQuestion:**
+- Workflow choice (integrated vs phased)
+- Council preset selection
+- Feature priority confirmation
+- Ambiguity resolution during validation
+- Phase transition confirmations
+
+**Example - Workflow Choice:**
+```
+Question: "Which workflow would you like to use?"
+Options:
+  - "Integrated (faster)" - "Single council handles all analysis. Best for MVPs and simple projects."
+  - "Phased (thorough)" - "Separates features from architecture. Best for complex or enterprise projects."
+```
+
+**Example - After Phase Completion:**
+```
+Question: "Features phase complete. How would you like to proceed?"
+Options:
+  - "Continue to architecture" - "Proceed with the architecture phase using these features."
+  - "Review advisory concerns" - "Review the 13 advisory concerns before continuing."
+  - "Adjust features" - "Make changes to the features output before continuing."
+```
+
 ### Workflow Choice
 
 Before completing the interview, ask:
@@ -132,11 +160,22 @@ npm run validate questions # List all questions to resolve
 npm run validate template  # Generate decisions.json template
 ```
 
-For each ambiguity:
-1. Explain it clearly to the human
-2. Present options if available
-3. Ask for their decision
-4. Record the decision
+For each ambiguity, use `AskUserQuestion` to present clear options:
+
+```
+Question: "[Ambiguity description]"
+Header: "AMB-001"
+Options:
+  - "[Option A]" - "[Rationale/implications of this choice]"
+  - "[Option B]" - "[Rationale/implications of this choice]"
+  - "[Option C]" - "[Rationale/implications of this choice]"
+```
+
+**Process:**
+1. Explain the ambiguity context clearly
+2. Use AskUserQuestion with the available options
+3. Record their decision with rationale
+4. Move to the next ambiguity
 
 Update the ambiguity's `resolution` field:
 ```json
@@ -228,6 +267,21 @@ Announce workflow completion and provide the user with paths to all final artifa
 ## Phased Workflow (Alternative)
 
 If the user chose the phased workflow during interview:
+
+### Phase Transitions
+
+After each phase completes, use `AskUserQuestion` to confirm before proceeding:
+
+```
+Question: "[Phase] complete. [Summary stats]. How would you like to proceed?"
+Options:
+  - "Continue to [next phase]" - "Proceed with the generated output."
+  - "Review advisory concerns" - "Review the N advisory concerns first."
+  - "Review output files" - "Examine the JSON output before continuing."
+  - "Adjust and re-run" - "Make changes and re-run this phase."
+```
+
+This gives the user control at each checkpoint rather than running all phases automatically.
 
 ### Features Phase
 

@@ -277,10 +277,12 @@ Config: responders=${phaseConfig.responders}, chairman=${phaseConfig.chairman}, 
 
     const prompt = buildFeaturesPrompt(interview);
 
+    // If user explicitly requests --confirm, trust they want interactive prompts
+    // even if stdout isn't detected as TTY (e.g., running through Claude Code)
     const result = await runEnhancedPipeline(prompt, {
       config: pipelineConfig,
       timeoutMs: config.council.timeout_seconds * 1000,
-      tty: process.stdout.isTTY ?? false,
+      tty: phaseConfig.confirm ? true : (process.stdout.isTTY ?? false),
       silent: false,
     });
 
@@ -291,20 +293,27 @@ Config: responders=${phaseConfig.responders}, chairman=${phaseConfig.chairman}, 
     // Parse the output
     const output = parseFeaturesPipelineOutput(result, interview, phaseConfig.presetName);
 
+    // Determine output path first (needed for critique logging)
+    const outputPath = options.output || join(STATE_DIR, 'phase-features-output.json');
+
     // Handle critique results
     if (result.critiqueResult) {
       output.advisory = extractAdvisoryConcerns(result.critiqueResult);
+
+      // Write full critique log (blocking applied/rejected + advisory)
+      const critiquePath = outputPath.replace('.json', '.critiques.md');
+      writeCritiqueLog(critiquePath, 'features', result.critiqueResult);
+      console.log(`\nCritique results logged to: ${critiquePath}`);
     }
 
     // Write output
-    const outputPath = options.output || join(STATE_DIR, 'phase-features-output.json');
     writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
-    // Write advisory log if any
+    // Write advisory log if any (kept for backward compatibility)
     if (output.advisory && output.advisory.length > 0) {
       const advisoryPath = outputPath.replace('.json', '.advisory.md');
       writeAdvisoryLog(advisoryPath, 'features', output.advisory);
-      console.log(`\nAdvisory concerns logged to: ${advisoryPath}`);
+      console.log(`Advisory concerns logged to: ${advisoryPath}`);
     }
 
     log(`Features phase complete. Output: ${outputPath}`);
@@ -397,10 +406,12 @@ Features hash: ${features.metadata.interview_hash}
 
     const prompt = buildArchitecturePrompt(features, interview);
 
+    // If user explicitly requests --confirm, trust they want interactive prompts
+    // even if stdout isn't detected as TTY (e.g., running through Claude Code)
     const result = await runEnhancedPipeline(prompt, {
       config: pipelineConfig,
       timeoutMs: config.council.timeout_seconds * 1000,
-      tty: process.stdout.isTTY ?? false,
+      tty: phaseConfig.confirm ? true : (process.stdout.isTTY ?? false),
       silent: false,
     });
 
@@ -411,16 +422,23 @@ Features hash: ${features.metadata.interview_hash}
     // Parse the output
     const output = parseArchitecturePipelineOutput(result, features, phaseConfig.presetName);
 
+    // Determine output path first (needed for critique logging)
+    const outputPath = options.output || join(STATE_DIR, 'phase-architecture-output.json');
+
     // Handle critique results
     if (result.critiqueResult) {
       output.advisory = extractAdvisoryConcerns(result.critiqueResult);
+
+      // Write full critique log (blocking applied/rejected + advisory)
+      const critiquePath = outputPath.replace('.json', '.critiques.md');
+      writeCritiqueLog(critiquePath, 'architecture', result.critiqueResult);
+      console.log(`\nCritique results logged to: ${critiquePath}`);
     }
 
     // Write output
-    const outputPath = options.output || join(STATE_DIR, 'phase-architecture-output.json');
     writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
-    // Write advisory log if any
+    // Write advisory log if any (kept for backward compatibility)
     if (output.advisory && output.advisory.length > 0) {
       const advisoryPath = outputPath.replace('.json', '.advisory.md');
       writeAdvisoryLog(advisoryPath, 'architecture', output.advisory);
@@ -518,10 +536,12 @@ Architecture hash: ${architecture.metadata.features_hash}
 
     const prompt = buildSpecFromPhasesPrompt(features, architecture, interview);
 
+    // If user explicitly requests --confirm, trust they want interactive prompts
+    // even if stdout isn't detected as TTY (e.g., running through Claude Code)
     const result = await runEnhancedPipeline(prompt, {
       config: pipelineConfig,
       timeoutMs: config.council.timeout_seconds * 1000,
-      tty: process.stdout.isTTY ?? false,
+      tty: phaseConfig.confirm ? true : (process.stdout.isTTY ?? false),
       silent: false,
     });
 
@@ -829,6 +849,72 @@ ${concerns.map(c => `
 ${c.description}
 
 ${c.suggestion ? `**Suggestion:** ${c.suggestion}` : ''}
+`).join('\n---\n')}
+`;
+
+  writeFileSync(path, content);
+}
+
+/**
+ * Write full critique log including blocking (applied/rejected) and advisory.
+ */
+function writeCritiqueLog(path: string, phase: string, critiqueResult: CritiqueResult): void {
+  const applied = critiqueResult.blocking?.applied || [];
+  const rejected = critiqueResult.blocking?.rejected || [];
+  const advisory = critiqueResult.advisory || [];
+
+  const content = `# Critique Results - ${phase.charAt(0).toUpperCase() + phase.slice(1)} Phase
+
+Generated: ${new Date().toISOString()}
+
+## Summary
+
+| Category | Count |
+|----------|-------|
+| Blocking Applied | ${applied.length} |
+| Blocking Rejected | ${rejected.length} |
+| Advisory | ${advisory.length} |
+
+---
+
+## Blocking Critiques - Applied (${applied.length})
+
+These critiques were automatically applied to improve the output.
+
+${applied.length === 0 ? '_None_' : applied.map((c, i) => `
+### ${i + 1}. [${c.source}] ${c.location || 'General'}
+
+**Issue:** ${c.description}
+
+**Recommendation:** ${c.recommendation || 'N/A'}
+`).join('\n---\n')}
+
+---
+
+## Blocking Critiques - Rejected (${rejected.length})
+
+These critiques were raised but rejected by the chairman (already addressed, not applicable, or incorrect).
+
+${rejected.length === 0 ? '_None_' : rejected.map((c, i) => `
+### ${i + 1}. [${c.source}] ${c.location || 'General'}
+
+**Issue:** ${c.description}
+
+**Rejection Reason:** ${(c as any).rejectionReason || 'Not specified'}
+`).join('\n---\n')}
+
+---
+
+## Advisory Concerns (${advisory.length})
+
+These concerns are logged for human review but not automatically applied.
+
+${advisory.length === 0 ? '_None_' : advisory.map((c, i) => `
+### ${i + 1}. [${c.source}] ${c.location || 'General'}
+
+**Concern:** ${c.description}
+
+**Recommendation:** ${c.recommendation || 'N/A'}
 `).join('\n---\n')}
 `;
 
