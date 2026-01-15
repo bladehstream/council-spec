@@ -16,6 +16,7 @@
     "export:spec": "node dist/export-spec.js",
     "export:tests": "node dist/export-tests.js",
     "export:all": "npm run export:spec && npm run export:tests",
+    "traceability": "node dist/traceability.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
