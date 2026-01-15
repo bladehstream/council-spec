@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync } 
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import type { InterviewOutput, CouncilOutput, SpecFinal, Config } from './types.js';
+import type { InterviewOutput, CouncilOutput, SpecFinal, Config, FeatureManifest, FeatureManifestEntry, FeaturesPhaseOutput } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -86,6 +86,86 @@ function extractProjectId(): string {
   return `spec-${Date.now()}`;
 }
 
+// ============================================================================
+// Feature ID Assignment and Manifest Building
+// ============================================================================
+
+interface CoreFunctionalityItem {
+  id?: string;
+  feature: string;
+  description?: string;
+  priority: 'must_have' | 'should_have' | 'nice_to_have';
+}
+
+/**
+ * Assigns stable feature IDs (FEAT-001, FEAT-002, etc.) to features.
+ * Preserves existing IDs if they match the expected pattern.
+ */
+function assignFeatureIds(features: CoreFunctionalityItem[]): Array<CoreFunctionalityItem & { id: string }> {
+  let nextId = 1;
+  return features.map(f => {
+    // If feature already has a valid ID, keep it
+    if (f.id && /^FEAT-\d{3}$/.test(f.id)) {
+      // Update nextId to avoid conflicts
+      const existingNum = parseInt(f.id.split('-')[1], 10);
+      if (existingNum >= nextId) {
+        nextId = existingNum + 1;
+      }
+      return f as CoreFunctionalityItem & { id: string };
+    }
+    // Assign a new ID
+    const id = `FEAT-${String(nextId++).padStart(3, '0')}`;
+    return { ...f, id };
+  });
+}
+
+/**
+ * Builds a feature manifest from interview data or phased workflow output.
+ * Prefers phase-features-output.json if it exists (richer data).
+ */
+function buildFeatureManifest(interview: InterviewOutput): FeatureManifest {
+  // Check for phased workflow output first
+  const phaseFeaturesPath = join(STATE_DIR, 'phase-features-output.json');
+  if (existsSync(phaseFeaturesPath)) {
+    try {
+      const phaseFeatures = JSON.parse(readFileSync(phaseFeaturesPath, 'utf-8')) as FeaturesPhaseOutput;
+      if (phaseFeatures.features?.length > 0) {
+        console.log('  Using feature IDs from phase-features-output.json');
+        return {
+          features: phaseFeatures.features.map(f => ({
+            id: f.id,
+            name: f.name,
+            description: f.description,
+            priority: f.priority,
+            acceptance_criteria: f.acceptance_criteria,
+          })),
+          generated_at: new Date().toISOString(),
+        };
+      }
+    } catch (e) {
+      console.warn('  Warning: Could not parse phase-features-output.json, falling back to interview');
+    }
+  }
+
+  // Fall back to interview core_functionality
+  const featuresWithIds = assignFeatureIds(interview.core_functionality);
+  console.log(`  Assigned ${featuresWithIds.length} feature IDs from interview`);
+
+  return {
+    features: featuresWithIds.map(f => ({
+      id: f.id,
+      name: f.feature,
+      description: f.description || '',
+      priority: f.priority,
+    })),
+    generated_at: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
+// Specification Compilation
+// ============================================================================
+
 function compileSpecification(
   interview: InterviewOutput,
   council: CouncilOutput,
@@ -96,6 +176,9 @@ function compileSpecification(
 
   // Extract spec sections from council synthesis or use defaults
   const specSections = council.spec_sections || {};
+
+  // Build feature manifest with stable IDs
+  const featureManifest = buildFeatureManifest(interview);
 
   // Build the final specification
   const spec: SpecFinal = {
@@ -120,6 +203,7 @@ function compileSpecification(
       deployment: specSections.deployment || 'See council synthesis',
       acceptance_criteria: interview.success_criteria || [],
     },
+    feature_manifest: featureManifest,
   };
 
   return spec;
@@ -132,6 +216,9 @@ function compileExtendedSpec(
 ): Record<string, unknown> {
   const config = loadConfig();
   const preferences = loadPreferences();
+
+  // Build feature manifest with stable IDs
+  const featureManifest = buildFeatureManifest(interview);
 
   // Build an extended specification that preserves more detail
   return {
@@ -184,6 +271,9 @@ function compileExtendedSpec(
     // If council didn't extract sections, include the full synthesis
     council_synthesis: !council.spec_sections?.architecture ?
       council.stage3.synthesis : undefined,
+
+    // Feature manifest with stable IDs for traceability
+    feature_manifest: featureManifest,
   };
 }
 
@@ -245,6 +335,9 @@ if (hasExtendedFields) {
 const outputPath = join(STATE_DIR, 'spec-final.json');
 writeFileSync(outputPath, JSON.stringify(output, null, 2));
 
+// Extract feature count from output
+const featureCount = (output as any).feature_manifest?.features?.length || 0;
+
 log(`
 --- PHASE: COMPLETE ---
 [${new Date().toISOString()}]
@@ -253,6 +346,7 @@ Final spec written to state/spec-final.json
 Interview hash: ${currentHash}
 Decisions included: ${decisions?.decisions.length || 0}
 Format: ${hasExtendedFields ? 'extended' : 'standard'}
+Features with IDs: ${featureCount}
 `);
 
 console.log('');
@@ -260,3 +354,4 @@ console.log('Final specification written to state/spec-final.json');
 console.log(`  Interview hash: ${currentHash}`);
 console.log(`  Decisions: ${decisions?.decisions.length || 0}`);
 console.log(`  Format: ${hasExtendedFields ? 'extended' : 'standard'}`);
+console.log(`  Features: ${featureCount} (with stable IDs)`);
