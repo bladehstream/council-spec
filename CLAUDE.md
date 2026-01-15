@@ -29,11 +29,12 @@ This project generates complete software specifications and test plans through A
   - `npm run council` - Launch the spec council (merge mode, integrated workflow)
   - `npm run phase -- [options]` - Launch phased workflow (features → architecture → spec)
   - `npm run validate [command]` - Validation helper (see below)
-  - `npm run finalize` - Compile final specification from interview + council + decisions
-  - `npm run test-council` - Generate test plan from spec (merge mode)
+  - `npm run finalize` - Compile final specification with feature manifest
+  - `npm run test-council` - Generate test plan with feature traceability
   - `npm run export:spec` - Export spec-final.json to markdown
   - `npm run export:tests` - Export test-plan-output.json to markdown
   - `npm run export:all` - Export both spec and test plan to markdown
+  - `npm run traceability [command]` - Query feature-to-test relationships (see below)
 - **Read files** for context (config.json, prompts/workflow.md, existing state files)
 
 ### Prohibited Actions
@@ -201,6 +202,8 @@ This compiles `state/spec-final.json` from:
 - `state/spec-council-output.json` (analysis)
 - `state/decisions.json` (human decisions)
 
+**Feature Manifest:** Finalize also creates a `feature_manifest` in spec-final.json with stable feature IDs (FEAT-001, FEAT-002, etc.) for each feature. These IDs enable traceability between features and tests.
+
 **Do NOT manually write spec-final.json** - always use the finalize command.
 
 ### 5. Test Council (Merge Mode)
@@ -215,13 +218,16 @@ RESUME_STAGE1=true COUNCIL_CHAIRMAN=gemini:default npm run test-council
 ```
 
 This uses **merge mode** where ALL responses are combined (not ranked):
-- **Stage 1 (Responders)**: Multiple agents generate test cases independently
+- **Stage 1 (Responders)**: Multiple agents generate test cases with `validates_features` linking to feature IDs
 - **Stage 2 (Deduplication)**: Sectioned deduplication pre-consolidates content (enabled by default)
 - **Stage 3 (Chairman)**: Two-pass synthesis merges all unique test cases
-  - Pass 1: Categorize and deduplicate tests from all responders
+  - Pass 1: Categorize and deduplicate tests, union-merge feature refs
   - Pass 2: Refine into structured test plan with priorities
+- **Stage 4 (Traceability)**: Writes `validated_by_tests` back to spec-final.json for each feature
 
 **Why merge mode for tests?** Unlike specifications where we want the BEST approach, test plans benefit from diverse perspectives. Each model may identify unique edge cases, security concerns, or test scenarios that others miss.
+
+**Feature Traceability:** Each test includes a `validates_features` array linking to feature IDs. When tests are merged, feature refs are unioned (combined). After generation, test-council updates spec-final.json with `validated_by_tests` per feature, creating bidirectional traceability.
 
 **Sectioned Deduplication with Gap Analysis (Stage 2 - Default)**
 

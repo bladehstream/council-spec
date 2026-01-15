@@ -106,18 +106,22 @@ All inputs are compiled into a comprehensive specification (~100KB+):
 - Security considerations
 - Deployment strategy
 - Validated decisions
+- **Feature manifest** with stable IDs (FEAT-001, FEAT-002, etc.) for traceability
 
 ### Phase 5: Test Council (Merge Mode)
 
 Generate a comprehensive test plan using **merge mode**:
 
-- **Stage 1**: Each agent generates test cases independently
+- **Stage 1**: Each agent generates test cases with `validates_features` linking to feature IDs
 - **Stage 2**: Sectioned deduplication pre-consolidates content (enabled by default)
-- **Stage 3**: Two-pass chairman **merges ALL** unique test cases:
+- **Stage 3**: Two-pass chairman **merges ALL** unique test cases (union of feature refs)
   - **Pass 1**: Categorize and deduplicate tests from all responders
   - **Pass 2**: Refine into structured test plan with priorities
+- **Stage 4**: Write `validated_by_tests` back to spec-final.json for bidirectional traceability
 
 **Why merge mode?** For test plans, we want ALL ideas - each model identifies unique edge cases, security concerns, and scenarios that others miss.
+
+**Feature Traceability:** Every test links to features it validates. After test-council completes, `spec-final.json` is updated with reverse mappings (`validated_by_tests` per feature).
 
 ### Phase 6: Export
 
@@ -247,6 +251,13 @@ npm run export:spec   # Spec only
 npm run export:tests  # Test plan only
 npm run export:all    # Both
 
+# Feature-to-test traceability
+npm run traceability                     # Summary: coverage %, gaps
+npm run traceability feature FEAT-001    # List tests for a feature
+npm run traceability test UNIT-001       # List features a test validates
+npm run traceability gaps                # List features with no tests
+npm run traceability check               # CI: exit 1 if must_have features lack tests
+
 # === PHASED WORKFLOW ===
 
 # Run individual phases (see "Phased Workflow" section for details)
@@ -314,6 +325,78 @@ COUNCIL_PRESET=merge-thorough COUNCIL_CHAIRMAN=claude:heavy/default npm run test
 
 This is useful when Pass 1 (synthesis/analysis) benefits from heavier reasoning, but Pass 2 (JSON formatting) needs speed and reliability.
 
+## Feature-to-Test Traceability
+
+Council Spec provides bidirectional traceability between features and tests:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     TRACEABILITY DATA FLOW                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  1. FINALIZE                                                        │
+│     spec-final.json gets feature_manifest with stable IDs:         │
+│     { id: "FEAT-001", name: "User Authentication", priority: ... } │
+│                                                                     │
+│  2. TEST-COUNCIL (Stage 1)                                          │
+│     Responders generate tests with validates_features:             │
+│     { id: "UNIT-001", validates_features: ["FEAT-001", "FEAT-002"] }│
+│                                                                     │
+│  3. TEST-COUNCIL (Stage 3)                                          │
+│     Chairman merges tests → UNION of feature refs:                 │
+│     Test A [FEAT-001] + Test B [FEAT-002] → Merged [FEAT-001,002] │
+│                                                                     │
+│  4. TEST-COUNCIL (Stage 4)                                          │
+│     Write validated_by_tests back to spec-final.json:              │
+│     FEAT-001: validated_by_tests: ["UNIT-001", "INT-003", ...]     │
+│                                                                     │
+│  Result: Bidirectional links in both artifacts                      │
+│     spec-final.json: feature → tests                                │
+│     test-plan-output.json: test → features                          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Traceability CLI
+
+Query feature-test relationships:
+
+```bash
+# Summary report with coverage percentage
+npm run traceability
+
+# Output:
+# Feature-to-Test Traceability Report
+# ====================================
+# Coverage: 8/10 features (80%)
+#
+# ✓ FEAT-001: User Authentication      → 5 tests [must_have]
+# ✓ FEAT-002: Image Upload             → 3 tests [must_have]
+# ✗ FEAT-003: Data Export              → 0 tests [must_have] - NEEDS COVERAGE
+# ...
+
+# Details for a specific feature
+npm run traceability feature FEAT-001
+
+# Reverse lookup: which features does this test validate?
+npm run traceability test UNIT-001
+
+# List all features without tests
+npm run traceability gaps
+
+# CI check: exits 1 if must_have features lack tests
+npm run traceability check
+```
+
+### Use Case: Validation-Driven Testing
+
+When a feature is implemented, know exactly which tests to run:
+
+1. Developer completes FEAT-001 (User Authentication)
+2. Run `npm run traceability feature FEAT-001`
+3. Output shows: `UNIT-001, UNIT-005, INT-003, SEC-001, E2E-001`
+4. Run those specific tests to validate the feature
+
 ## Configuration
 
 The `config.json` provides defaults, but **presets override these**:
@@ -344,12 +427,13 @@ The `config.json` provides defaults, but **presets override these**:
 council-spec/
 ├── src/
 │   ├── council.ts        # Spec council runner (merge mode)
-│   ├── test-council.ts   # Test council runner (merge mode)
+│   ├── test-council.ts   # Test council runner (merge mode + traceability)
 │   ├── phase.ts          # Phased workflow orchestrator
 │   ├── phase-prompts.ts  # Phase-specific prompt templates
-│   ├── finalize.ts       # Final spec compilation
+│   ├── finalize.ts       # Final spec compilation + feature manifest
 │   ├── export-spec.ts    # Spec JSON → markdown conversion
 │   ├── export-tests.ts   # Test plan JSON → markdown conversion
+│   ├── traceability.ts   # Feature-to-test traceability CLI
 │   ├── markdown-utils.ts # Shared markdown formatting utilities
 │   ├── validate.ts       # Validation helper
 │   ├── init.ts           # Project initialization
@@ -376,9 +460,9 @@ council-spec/
 | `interview-output.json` | Interview phase | Structured requirements |
 | `spec-council-output.json` | Spec Council phase | Multi-agent analysis + spec sections |
 | `decisions.json` | Validation phase | Human decisions on ambiguities |
-| `spec-final.json` | Finalize phase | Complete specification (~100KB) |
+| `spec-final.json` | Finalize phase | Complete specification with feature manifest |
 | `spec-final.md` | Export phase | Human-readable specification |
-| `test-plan-output.json` | Test Council phase | Comprehensive test plan |
+| `test-plan-output.json` | Test Council phase | Comprehensive test plan with feature links |
 | `test-plan.md` | Export phase | Human-readable test plan |
 
 ### Phased Workflow (Additional Files)
@@ -406,7 +490,50 @@ The `spec-final.json` contains:
   "api_contracts": "...",     // ~11KB
   "user_flows": "...",        // ~15KB
   "security": "...",          // ~9KB
-  "deployment": "..."         // ~15KB
+  "deployment": "...",        // ~15KB
+  "feature_manifest": {       // Feature traceability
+    "features": [
+      {
+        "id": "FEAT-001",
+        "name": "User Authentication",
+        "priority": "must_have",
+        "validated_by_tests": ["UNIT-001", "INT-003", "SEC-001"]
+      }
+    ],
+    "generated_at": "...",
+    "tests_linked_at": "..."  // Updated by test-council
+  }
+}
+```
+
+### Test Plan Structure
+
+The `test-plan-output.json` contains:
+
+```json
+{
+  "metadata": { "project_id": "...", "total_tests": 42, ... },
+  "tests": {
+    "unit": [
+      {
+        "id": "UNIT-001",
+        "name": "Password validation rejects weak passwords",
+        "validates_features": ["FEAT-001"],  // Links to features
+        "priority": "critical",
+        "expected_result": "..."
+      }
+    ],
+    "integration": [...],
+    "e2e": [...],
+    "security": [...],
+    "performance": [...],
+    "edge_cases": [...]
+  },
+  "coverage_summary": {
+    "features_covered": ["FEAT-001", "FEAT-002"],
+    "features_uncovered": ["FEAT-005"],
+    "coverage_percentage": 80
+  }
 }
 ```
 
@@ -432,9 +559,9 @@ Contains all interview Q&A, council execution details, validation decisions, and
 ## Testing
 
 ```bash
-npm run test           # All tests (79 tests)
-npm run test:unit      # Unit tests (27 tests)
-npm run test:integration  # Integration tests (20 tests)
+npm run test           # All tests (111 tests)
+npm run test:unit      # Unit tests (54 tests)
+npm run test:integration  # Integration tests (25 tests)
 npm run test:contract  # Contract tests (17 tests)
 npm run test:smoke     # End-to-end smoke tests (15 tests)
 npm run test:coverage  # With coverage report
