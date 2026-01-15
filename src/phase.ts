@@ -61,6 +61,7 @@ import {
   buildArchitectureCritiquePrompt,
 } from './phase-prompts.js';
 import { smartParseChairmanOutput, sectionsToMap } from './json-parser.js';
+import { runTestCouncil } from './test-council.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -126,7 +127,7 @@ Options:
   --input <file>     Input file from previous phase (can be specified multiple times)
                      - architecture phase requires features input
                      - spec phase requires features and architecture inputs
-                     - tests phase requires spec input
+                     - tests phase reads from state/spec-final.json (no input required)
 
   --output <file>    Output file path for this phase's artifact
                      Default: state/phase-<name>-output.json
@@ -146,6 +147,9 @@ Examples:
 
   # Run spec phase from split inputs
   npm run phase -- --phase spec --input state/features.json --input state/architecture.json
+
+  # Run tests phase (requires spec-final.json from finalize)
+  npm run phase -- --phase tests
 
   # Run full integrated workflow (backward compatible)
   npm run phase -- --phase all
@@ -617,6 +621,81 @@ Architecture hash: ${architecture.metadata.features_hash}
 }
 
 /**
+ * Run the tests phase: generate comprehensive test plan from spec-final.json.
+ * This calls the test-council module directly instead of printing instructions.
+ */
+async function runTestsPhase(
+  config: ExtendedConfig,
+  options: ParsedArgs
+): Promise<PhaseResult> {
+  const startTime = Date.now();
+  const phaseConfig = getEffectivePhaseConfig(config, 'tests', options);
+
+  console.log('\n' + '='.repeat(60));
+  console.log('PHASE: TESTS');
+  console.log('='.repeat(60));
+  console.log('Generating comprehensive test plan from spec-final.json');
+  console.log(`Preset: ${phaseConfig.presetName}`);
+  console.log(`Responders: ${phaseConfig.responders}`);
+  console.log(`Chairman: ${phaseConfig.chairman}`);
+  console.log('');
+
+  log(`
+--- PHASE: TESTS ---
+[${new Date().toISOString()}]
+Config: preset=${phaseConfig.presetName}, responders=${phaseConfig.responders}, chairman=${phaseConfig.chairman}
+`);
+
+  try {
+    // Call test-council programmatically
+    const testResult = await runTestCouncil({
+      preset: phaseConfig.presetName,
+      responders: phaseConfig.responders,
+      chairman: phaseConfig.chairman,
+      fromPhase: true,
+      tty: phaseConfig.confirm ? true : (process.stdout.isTTY ?? false),
+    });
+
+    if (!testResult.success) {
+      log(`Tests phase FAILED: ${testResult.error}`);
+      return {
+        phase: 'tests',
+        success: false,
+        error: testResult.error,
+        duration_ms: Date.now() - startTime,
+      };
+    }
+
+    log(`Tests phase complete. Output: ${testResult.outputPath}`);
+
+    console.log('\n' + '='.repeat(60));
+    console.log('Tests Phase Complete');
+    console.log('='.repeat(60));
+    console.log(`Total tests: ${testResult.totalTests}`);
+    console.log(`Output: ${testResult.outputPath}`);
+    console.log(`Duration: ${((testResult.durationMs || 0) / 1000).toFixed(1)}s`);
+
+    return {
+      phase: 'tests',
+      success: true,
+      output_file: testResult.outputPath,
+      duration_ms: Date.now() - startTime,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`Tests phase FAILED: ${errorMessage}`);
+    console.error('Tests phase failed:', errorMessage);
+
+    return {
+      phase: 'tests',
+      success: false,
+      error: errorMessage,
+      duration_ms: Date.now() - startTime,
+    };
+  }
+}
+
+/**
  * Run all phases sequentially (backward compatible integrated workflow).
  */
 async function runAllPhases(
@@ -945,9 +1024,8 @@ function validateInputs(phase: PhaseName, inputs: string[]): void {
       }
       break;
     case 'tests':
-      if (inputs.length === 0) {
-        throw new Error('Tests phase requires --input with spec file');
-      }
+      // Tests phase reads from spec-final.json directly, no explicit input required
+      // The test-council module handles checking for spec-final.json
       break;
   }
 }
@@ -972,8 +1050,8 @@ async function main() {
   const config = loadConfig();
   const interview = loadInterview();
 
-  // Validate inputs for phase
-  if (args.phase !== 'all' && args.phase !== 'features') {
+  // Validate inputs for phase (tests and features read from fixed paths)
+  if (args.phase !== 'all' && args.phase !== 'features' && args.phase !== 'tests') {
     validateInputs(args.phase, args.input || []);
   }
 
@@ -1014,13 +1092,8 @@ async function main() {
     }
 
     case 'tests': {
-      // Tests phase uses existing test-council, just print instructions
-      console.log('Tests phase uses existing test-council.');
-      console.log('Run: npm run test-council');
-      console.log('');
-      console.log('To use critique mode with tests:');
-      console.log('COUNCIL_PRESET=merge-balanced npm run test-council');
-      process.exit(0);
+      result = await runTestsPhase(config, args);
+      break;
     }
 
     case 'all':

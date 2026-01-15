@@ -628,6 +628,32 @@ interface TestPlanOutput {
 }
 
 // ============================================================================
+// Test Council Options & Result (for programmatic use)
+// ============================================================================
+
+export interface TestCouncilOptions {
+  /** Preset name (defaults to 'merge-balanced') */
+  preset?: string;
+  /** Override responders (e.g., '3:heavy' or 'claude:heavy,gemini:heavy') */
+  responders?: string;
+  /** Override chairman (e.g., 'gemini:heavy' or 'claude:heavy/default') */
+  chairman?: string;
+  /** Whether this is running from phase.ts (affects output path handling) */
+  fromPhase?: boolean;
+  /** TTY mode for interactive prompts */
+  tty?: boolean;
+}
+
+export interface TestCouncilResult {
+  success: boolean;
+  outputPath?: string;
+  testPlan?: TestPlanOutput;
+  totalTests?: number;
+  error?: string;
+  durationMs: number;
+}
+
+// ============================================================================
 // Logging
 // ============================================================================
 
@@ -784,7 +810,13 @@ IMPORTANT: Every test MUST include validates_features with at least one feature 
 // Main
 // ============================================================================
 
-async function main() {
+/**
+ * Run the test council programmatically.
+ * This is the main entry point that can be called from phase.ts or directly.
+ */
+export async function runTestCouncil(options: TestCouncilOptions = {}): Promise<TestCouncilResult> {
+  const startTime = Date.now();
+
   console.log('='.repeat(60));
   console.log('TEST COUNCIL - Generate Test Plan via Merge Mode');
   console.log('='.repeat(60));
@@ -793,9 +825,13 @@ async function main() {
   // Check for spec-final.json
   const specPath = join(STATE_DIR, 'spec-final.json');
   if (!existsSync(specPath)) {
-    console.error('Error: state/spec-final.json not found');
-    console.error('Run "npm run finalize" first to generate the specification');
-    process.exit(1);
+    const errorMsg = 'Error: state/spec-final.json not found. Run "npm run finalize" first.';
+    console.error(errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+      durationMs: Date.now() - startTime,
+    };
   }
 
   const spec: ExtendedSpec = JSON.parse(readFileSync(specPath, 'utf-8'));
@@ -803,8 +839,8 @@ async function main() {
   const version = spec.metadata?.version || '1.0.0';
   console.log(`Loaded spec: ${projectName} v${version}`);
 
-  // Determine preset (TEST_COUNCIL_PRESET overrides COUNCIL_PRESET for test-specific presets)
-  const presetName = process.env.TEST_COUNCIL_PRESET || process.env.COUNCIL_PRESET || 'merge-balanced';
+  // Determine preset (options > TEST_COUNCIL_PRESET > COUNCIL_PRESET > default)
+  const presetName = options.preset || process.env.TEST_COUNCIL_PRESET || process.env.COUNCIL_PRESET || 'merge-balanced';
   console.log(`Using preset: ${presetName}`);
 
   // Load config and get available providers
@@ -815,8 +851,13 @@ async function main() {
   });
 
   if (availableProviders.length === 0) {
-    console.error('Error: No providers available');
-    process.exit(1);
+    const errorMsg = 'Error: No providers available';
+    console.error(errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+      durationMs: Date.now() - startTime,
+    };
   }
 
   console.log(`Available providers: ${availableProviders.join(', ')}`);
@@ -825,9 +866,10 @@ async function main() {
   const preset = getPreset(presetName, config);
   const pipelineConfig = buildPipelineConfig(preset, availableProviders, config);
 
-  // Apply environment variable overrides
-  if (process.env.COUNCIL_CHAIRMAN) {
-    const chairmanSpec = process.env.COUNCIL_CHAIRMAN;
+  // Apply overrides (options take precedence over env vars)
+  const chairmanOverride = options.chairman || process.env.COUNCIL_CHAIRMAN;
+  if (chairmanOverride) {
+    const chairmanSpec = chairmanOverride;
     console.log(`Overriding chairman with: ${chairmanSpec}`);
 
     // Parse format: provider:tier or provider:pass1tier/pass2tier
@@ -860,8 +902,9 @@ async function main() {
     }
   }
 
-  if (process.env.COUNCIL_RESPONDERS) {
-    const respondersSpec = process.env.COUNCIL_RESPONDERS;
+  const respondersOverride = options.responders || process.env.COUNCIL_RESPONDERS;
+  if (respondersOverride) {
+    const respondersSpec = respondersOverride;
     console.log(`Overriding responders with: ${respondersSpec}`);
     // Parse responders spec (e.g., "3:heavy" or "claude:heavy,gemini:heavy,codex:heavy")
     const responderAgents = respondersSpec.includes(':') && !respondersSpec.includes(',')
@@ -1300,7 +1343,7 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
     result = await runEnhancedPipeline(testPrompt, {
       config: pipelineConfig,
       timeoutMs,
-      tty: process.stdout.isTTY ?? false,
+      tty: options.tty ?? process.stdout.isTTY ?? false,
       silent: false,
       callbacks: {
         onStage1Complete: (results) => {
@@ -1330,8 +1373,13 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
   }
 
   if (!result) {
-    console.error('Test council failed - no result returned');
-    process.exit(1);
+    const errorMsg = 'Test council failed - no result returned';
+    console.error(errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+      durationMs: Date.now() - startTime,
+    };
   }
 
   // Parse and structure the output
@@ -1481,6 +1529,33 @@ Traceability: ${linkResult.featuresUpdated} features linked to ${linkResult.test
 
   console.log('');
   console.log(`Output: state/test-plan-output.json`);
+
+  // Return success result
+  return {
+    success: true,
+    outputPath,
+    testPlan,
+    totalTests: testPlan.metadata.total_tests,
+    durationMs: Date.now() - startTime,
+  };
+}
+
+// ============================================================================
+// CLI Entry Point
+// ============================================================================
+
+async function main() {
+  const result = await runTestCouncil();
+  process.exit(result.success ? 0 : 1);
+}
+
+// Only run main if this file is executed directly (not imported)
+const isMainModule = process.argv[1]?.includes('test-council');
+if (isMainModule) {
+  main().catch((error) => {
+    console.error('Test council failed:', error);
+    process.exit(1);
+  });
 }
 
 function countTests(tests: TestPlanOutput['tests']): number {
@@ -1688,8 +1763,3 @@ function writeTestLinksToSpec(
 
   return { written: true, featuresUpdated, testsLinked };
 }
-
-main().catch((error) => {
-  console.error('Test council failed:', error);
-  process.exit(1);
-});
