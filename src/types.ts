@@ -10,6 +10,7 @@ export interface InterviewOutput {
     goals?: string[];
   }>;
   core_functionality: Array<{
+    id?: string;                  // Optional: stable feature ID (e.g., FEAT-001)
     feature: string;
     description?: string;
     priority: 'must_have' | 'should_have' | 'nice_to_have';
@@ -112,6 +113,29 @@ export interface CouncilOutput {
   };
 }
 
+// ============================================================================
+// Feature Manifest Types (for traceability)
+// ============================================================================
+
+export interface FeatureManifestEntry {
+  id: string;                      // FEAT-001, FEAT-002, etc.
+  name: string;
+  description: string;
+  priority: 'must_have' | 'should_have' | 'nice_to_have';
+  acceptance_criteria?: string[];
+  validated_by_tests?: string[];   // Added by test-council: ["UNIT-001", "INT-003"]
+}
+
+export interface FeatureManifest {
+  features: FeatureManifestEntry[];
+  generated_at: string;
+  tests_linked_at?: string;        // Timestamp when test-council wrote back
+}
+
+// ============================================================================
+// Spec Final Types
+// ============================================================================
+
 export interface SpecFinal {
   project_id: string;
   version: string;
@@ -132,6 +156,7 @@ export interface SpecFinal {
     deployment: string;
     acceptance_criteria: string[];
   };
+  feature_manifest?: FeatureManifest;  // NEW: Feature traceability manifest
 }
 
 export interface Config {
@@ -177,7 +202,8 @@ export interface TestCase {
   preconditions?: string[];
   steps?: string[];
   expected_result: string;
-  coverage?: string[];
+  coverage?: string[];                              // Legacy: free-form coverage strings
+  validates_features?: string[];                    // NEW: Feature IDs this test validates ["FEAT-001"]
   source?: TestSource;                              // Model attribution
   atomicity?: 'atomic' | 'split_recommended';       // Atomicity status
   split_suggestion?: string[];                      // Suggested split test names
@@ -207,8 +233,10 @@ export interface TestPlanOutput {
   };
   tests: TestPlanTests;
   coverage_summary: {
-    features_covered: string[];
-    gaps_identified: string[];
+    features_covered: string[];          // Feature IDs with at least one test
+    features_uncovered?: string[];       // NEW: Feature IDs with NO tests (gaps)
+    gaps_identified: string[];           // Legacy: free-form gap descriptions
+    coverage_percentage?: number;        // NEW: Percentage of features with tests
     quantifiability?: {
       total_tests: number;
       quantifiable: number;

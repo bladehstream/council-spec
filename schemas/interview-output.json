@@ -63,6 +63,11 @@
         "type": "object",
         "required": ["feature", "priority"],
         "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^FEAT-\\d{3}$",
+            "description": "Optional stable feature ID (e.g., FEAT-001). Auto-generated during finalize if not provided."
+          },
           "feature": {
             "type": "string",
             "description": "Feature name"
