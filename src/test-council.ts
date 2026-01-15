@@ -566,6 +566,7 @@ interface TestCase {
   steps?: string[];
   expected_result: string;
   coverage?: string[];
+  validates_features?: string[];                    // Feature IDs this test validates ["FEAT-001"]
   source?: TestSource;                              // Model attribution
   atomicity?: 'atomic' | 'split_recommended';       // Atomicity status
   split_suggestion?: string[];                      // Suggested split test names
@@ -594,7 +595,9 @@ interface TestPlanOutput {
   };
   coverage_summary: {
     features_covered: string[];
+    features_uncovered?: string[];      // Feature IDs with NO tests (gaps)
     gaps_identified: string[];
+    coverage_percentage?: number;       // Percentage of features with tests
     quantifiability?: {
       total_tests: number;
       quantifiable: number;
@@ -1416,10 +1419,15 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
   const outputPath = join(STATE_DIR, 'test-plan-output.json');
   writeFileSync(outputPath, JSON.stringify(testPlan, null, 2));
 
+  // Write test links back to spec-final.json (Stage 4: bidirectional traceability)
+  // Note: specPath already declared earlier in main()
+  const linkResult = writeTestLinksToSpec(specPath, testPlan.tests);
+
   log(`
 Test council complete
 Total tests: ${testPlan.metadata.total_tests}
 Output: state/test-plan-output.json
+Traceability: ${linkResult.featuresUpdated} features linked to ${linkResult.testsLinked} tests
 `);
 
   console.log('');
@@ -1441,6 +1449,15 @@ Output: state/test-plan-output.json
     console.log(`  Quantifiability: ${quantStats.quantifiable}/${quantStats.total_tests} tests have clear acceptance criteria`);
     console.log(`  Needs clarification: ${quantStats.needs_clarification} tests`);
     console.log('  Run "npm run test-finalize" to generate clarification report');
+  }
+
+  // Traceability summary
+  if (linkResult.written) {
+    console.log('');
+    console.log('  Feature Traceability:');
+    console.log(`    Features with tests: ${linkResult.featuresUpdated}`);
+    console.log(`    Test-feature links: ${linkResult.testsLinked}`);
+    console.log('    spec-final.json updated with validated_by_tests');
   }
 
   console.log('');
@@ -1523,6 +1540,76 @@ function countTestsInResponse(response: string): number {
   // Simple heuristic: count test IDs
   const matches = response.match(/[A-Z]+-\d{3}/g);
   return matches ? matches.length : 0;
+}
+
+/**
+ * Writes validated_by_tests back to spec-final.json for each feature.
+ * Creates a bidirectional link: spec knows which tests validate each feature,
+ * tests know which features they validate.
+ */
+function writeTestLinksToSpec(
+  specPath: string,
+  tests: TestPlanOutput['tests']
+): { written: boolean; featuresUpdated: number; testsLinked: number } {
+  if (!existsSync(specPath)) {
+    console.warn('  Warning: spec-final.json not found, skipping test link write-back');
+    return { written: false, featuresUpdated: 0, testsLinked: 0 };
+  }
+
+  const spec = JSON.parse(readFileSync(specPath, 'utf-8'));
+
+  // Check if spec has feature_manifest
+  if (!spec.feature_manifest?.features || !Array.isArray(spec.feature_manifest.features)) {
+    console.warn('  Warning: spec-final.json has no feature_manifest, skipping test link write-back');
+    return { written: false, featuresUpdated: 0, testsLinked: 0 };
+  }
+
+  // Build reverse mapping: feature -> tests
+  const featureToTests: Record<string, string[]> = {};
+  for (const feature of spec.feature_manifest.features) {
+    featureToTests[feature.id] = [];
+  }
+
+  // Collect all tests
+  const allTests: TestCase[] = [
+    ...(tests.unit || []),
+    ...(tests.integration || []),
+    ...(tests.e2e || []),
+    ...(tests.security || []),
+    ...(tests.performance || []),
+    ...(tests.edge_cases || []),
+  ];
+
+  let testsLinked = 0;
+  for (const test of allTests) {
+    if (test.validates_features && Array.isArray(test.validates_features)) {
+      for (const featId of test.validates_features) {
+        if (featureToTests[featId] !== undefined) {
+          featureToTests[featId].push(test.id);
+          testsLinked++;
+        }
+      }
+    }
+  }
+
+  // Update spec with reverse mapping
+  let featuresUpdated = 0;
+  for (const feature of spec.feature_manifest.features) {
+    const linkedTests = featureToTests[feature.id] || [];
+    if (linkedTests.length > 0) {
+      feature.validated_by_tests = linkedTests;
+      featuresUpdated++;
+    } else {
+      // Clear any stale data
+      delete feature.validated_by_tests;
+    }
+  }
+
+  spec.feature_manifest.tests_linked_at = new Date().toISOString();
+
+  writeFileSync(specPath, JSON.stringify(spec, null, 2));
+
+  return { written: true, featuresUpdated, testsLinked };
 }
 
 main().catch((error) => {
