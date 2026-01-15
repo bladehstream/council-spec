@@ -261,6 +261,31 @@ npm run test-council
 To skip deduplication: `TEST_COUNCIL_SKIP_DEDUP=true`
 To override evaluator tier: `TEST_COUNCIL_DEDUP_EVALUATORS=3:fast`
 
+**Post-Parse Validation:**
+After the chairman produces output, the pipeline validates and fixes test fields:
+- `validates_features`: Missing refs are inferred from test category; invalid IDs filtered
+- `preconditions`: Ensured to be an array (empty if not provided)
+- `coverage`: Ensured to be an array (empty if not provided)
+- Warnings logged if any category falls below minimum test counts
+
+**Test Output Fields:**
+Each test in `test-plan-output.json` contains:
+```json
+{
+  "id": "UNIT-001",
+  "name": "Test name",
+  "description": "What this tests",
+  "priority": "critical|high|medium|low",
+  "category": "authentication",
+  "preconditions": ["User logged in", "Database seeded"],
+  "steps": ["Step 1", "Step 2"],
+  "expected_result": "Expected outcome",
+  "coverage": ["API: POST /auth/login", "Security: Password hashing"],
+  "validates_features": ["FEAT-001", "FEAT-002"],
+  "source": { "model": "claude:heavy", "merged_from": ["gemini:heavy"] }
+}
+```
+
 Output goes to `state/test-plan-output.json`.
 
 ### 6. Export

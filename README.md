@@ -123,6 +123,16 @@ Generate a comprehensive test plan using **merge mode**:
 
 **Feature Traceability:** Every test links to features it validates. After test-council completes, `spec-final.json` is updated with reverse mappings (`validated_by_tests` per feature).
 
+**Minimum Test Counts:** The chairman is instructed to produce minimum tests per category. Post-generation validation warns if any category falls short:
+- Security: 6+ tests (SSRF, XSS, injection, auth, rate limiting, input validation)
+- E2E: 4+ tests (main user flows)
+- Unit: 8+ tests (core functions)
+- Integration: 4+ tests
+- Performance: 3+ tests
+- Edge cases: 4+ tests
+
+**Post-Parse Validation:** Tests with missing `validates_features` are automatically inferred from the test category. Invalid feature IDs are filtered out.
+
 ### Phase 6: Export
 
 Convert JSON artifacts to human-readable markdown:
@@ -518,9 +528,15 @@ The `test-plan-output.json` contains:
       {
         "id": "UNIT-001",
         "name": "Password validation rejects weak passwords",
-        "validates_features": ["FEAT-001"],  // Links to features
+        "description": "Verify password meets complexity requirements",
         "priority": "critical",
-        "expected_result": "..."
+        "category": "authentication",
+        "preconditions": ["User registration form loaded"],
+        "steps": ["Enter weak password", "Submit form"],
+        "expected_result": "Form rejects with error message",
+        "coverage": ["API: POST /auth/register", "Security: Password policy"],
+        "validates_features": ["FEAT-001"],
+        "source": { "model": "claude:heavy" }
       }
     ],
     "integration": [...],
@@ -536,6 +552,12 @@ The `test-plan-output.json` contains:
   }
 }
 ```
+
+**Key test fields:**
+- `validates_features`: Array of FEAT-XXX IDs this test validates
+- `preconditions`: Setup requirements before running the test
+- `coverage`: Spec sections covered (API endpoints, security aspects, etc.)
+- `source`: Model attribution for traceability
 
 ## Checkpointing
 
