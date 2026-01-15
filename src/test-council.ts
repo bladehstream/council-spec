@@ -240,6 +240,7 @@ ${responsesText}
 ## Output Format
 
 IMPORTANT: Preserve ALL distinct test scenarios. Only merge truly identical tests.
+IMPORTANT: When merging tests, UNION the validates_features arrays from all source tests.
 
 For each section, list tests with full details:
 
@@ -249,6 +250,7 @@ ID: TEST-XXX
 Name: Test name
 Description: What this tests
 Priority: critical/high/medium/low
+Validates Features: FEAT-001, FEAT-002 (feature IDs this test validates)
 Steps:
 1. Step one
 2. Step two
@@ -262,7 +264,7 @@ ${sections.length > 1 ? `===SECTION:${sections[1]}===
 ===GAP_FLAGS===
 List any specification requirements that do NOT have adequate test coverage:
 - GAP: [requirement] - [what test is missing]
-- GAP: [requirement] - [what test is missing]
+- GAP: [FEAT-XXX] [feature name] - [what test is missing]
 (Write "NONE" if all requirements have coverage)`;
 }
 
@@ -899,6 +901,10 @@ async function main() {
    - Edge cases: at least 4 tests
 3. COVERAGE GAP HANDLING: Look for [COVERAGE_GAP] markers - these indicate missing test coverage that MUST be addressed
 4. ONLY MERGE TRULY IDENTICAL TESTS: Same scenario, same methodology, same expected outcome
+5. FEATURE TRACEABILITY - UNION MERGE: When merging tests, COMBINE their validates_features arrays:
+   - Test A validates [FEAT-001] + Test B validates [FEAT-002] → Merged test validates [FEAT-001, FEAT-002]
+   - Every test in your output MUST have at least one feature ID in its validates_features
+   - Preserve ALL feature references from source tests - never drop feature linkages
 
 ## Responses to Process
 
@@ -906,14 +912,15 @@ async function main() {
 
 ## Instructions
 
-For each test, note which model(s) contributed it:
-[MODEL: model_name] Test Name - Description
+For each test, note which model(s) contributed it AND its feature linkages:
+[MODEL: model_name] [FEATURES: FEAT-001, FEAT-002] Test Name - Description
 
 Group tests by category. IMPORTANT: If a category has fewer tests than the minimum, CREATE additional tests to fill gaps.
+When creating new tests, assign appropriate feature IDs based on what the test validates.
 
 ## UNIT TESTS (minimum 8)
-[MODEL: claude:heavy] Test Name - Brief description
-[MODEL: gemini:heavy, claude:heavy] Test Name - (identical test from multiple models)
+[MODEL: claude:heavy] [FEATURES: FEAT-001] Test Name - Brief description
+[MODEL: gemini:heavy, claude:heavy] [FEATURES: FEAT-001, FEAT-003] Test Name - (merged features from both models)
 ...
 
 ## INTEGRATION TESTS (minimum 4)
@@ -936,6 +943,10 @@ Must include: SSRF prevention, XSS prevention, SQL/NoSQL injection, LLM prompt i
 - [COVERAGE_GAP] flags found and addressed: (list)
 - Additional tests created to meet minimums: (list)
 
+## FEATURE TRACEABILITY SUMMARY
+- Tests with feature linkages: (count)
+- Union merges performed: (count)
+
 ## STATISTICS
 - Total tests listed: (count)
 - Tests merged: (count)
@@ -952,10 +963,16 @@ For source attribution:
 - If multiple models listed, use first as source.model, rest as source.merged_from
 - For tests you create to fill gaps, use source.model = "chairman" and source.created_by_chairman = true
 
+For feature traceability:
+- Extract feature IDs from [FEATURES: FEAT-001, FEAT-002] tags
+- validates_features MUST be an array of feature IDs (e.g., ["FEAT-001", "FEAT-002"])
+- Every test MUST have at least one feature ID in validates_features
+- When tests were merged, include ALL feature IDs from ALL source tests (union merge)
+
 JSON structure:
 {
   "tests": {
-    "unit": [{"id": "UNIT-001", "name": "...", "description": "...", "priority": "high|medium|low", "category": "...", "steps": ["..."], "expected_result": "...", "source": {"model": "...", "merged_from": ["..."]}}],
+    "unit": [{"id": "UNIT-001", "name": "...", "description": "...", "priority": "high|medium|low", "category": "...", "steps": ["..."], "expected_result": "...", "validates_features": ["FEAT-001"], "source": {"model": "...", "merged_from": ["..."]}}],
     "integration": [...],
     "e2e": [...],
     "security": [...],
@@ -963,8 +980,10 @@ JSON structure:
     "edge_cases": [...]
   },
   "coverage_summary": {
-    "features_covered": ["..."],
-    "gaps_identified": ["..."]
+    "features_covered": ["FEAT-001", "FEAT-002"],
+    "features_uncovered": ["FEAT-003"],
+    "gaps_identified": ["..."],
+    "coverage_percentage": 66
   },
   "merge_notes": "..."
 }`;
@@ -1046,6 +1065,14 @@ For tests with unquantifiable acceptance criteria:
 3. Add field: "suggested_threshold": "<if you can infer a reasonable threshold from context>"
 4. Add field: "spec_section": "<which part of the spec should define this threshold>"
 
+## FEATURE TRACEABILITY
+
+For EACH test, include validates_features linking to feature IDs from the spec:
+- validates_features MUST be an array of feature IDs (e.g., ["FEAT-001", "FEAT-002"])
+- Every test MUST have at least one feature ID
+- When merging similar tests: UNION the validates_features arrays from all source tests
+- Example: Test A validates [FEAT-001], Test B validates [FEAT-002] → Merged test validates [FEAT-001, FEAT-002]
+
 JSON structure:
 {
   "tests": {
@@ -1058,6 +1085,7 @@ JSON structure:
         "category": "...",
         "steps": ["step1", "step2"],
         "expected_result": "...",
+        "validates_features": ["FEAT-001", "FEAT-002"],
         "source": {
           "model": "claude:default",
           "merged_from": ["gemini:default"],
@@ -1073,6 +1101,7 @@ JSON structure:
         "category": "...",
         "steps": ["generate token", "validate format", "test expiry", "test invalid tokens", ...],
         "expected_result": "...",
+        "validates_features": ["FEAT-003"],
         "source": { "model": "gemini:default" },
         "atomicity": "split_recommended",
         "split_suggestion": ["Token Generation", "Token Format Validation", "Token Expiry", "Invalid Token Handling"]
@@ -1084,6 +1113,7 @@ JSON structure:
         "priority": "high",
         "category": "performance",
         "expected_result": "System gracefully degrades under thermal pressure",
+        "validates_features": ["FEAT-005"],
         "source": { "model": "codex:default" },
         "quantifiable": false,
         "clarification_needed": "What CPU temperature triggers throttling? What does 'gracefully' mean?",
@@ -1097,6 +1127,7 @@ JSON structure:
         "priority": "critical",
         "category": "security",
         "expected_result": "All user inputs are properly sanitized",
+        "validates_features": ["FEAT-001"],
         "source": { "model": "chairman", "created_by_chairman": true }
       }
     ],
@@ -1107,8 +1138,10 @@ JSON structure:
     "edge_cases": [...]
   },
   "coverage_summary": {
-    "features_covered": [...],
-    "gaps_identified": [...]
+    "features_covered": ["FEAT-001", "FEAT-002"],
+    "features_uncovered": ["FEAT-003"],
+    "gaps_identified": [...],
+    "coverage_percentage": 66
   },
   "merge_notes": "Brief notes on how responses were merged"
 }`;
