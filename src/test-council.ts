@@ -164,14 +164,39 @@ function getSpecFeaturesForSections(
 ): string {
   const features: string[] = [];
 
+  // Always include feature manifest for ID reference (CRITICAL for traceability)
+  if (specFeatures.featureManifest.length > 0) {
+    features.push('## Feature Manifest (use these FEAT-XXX IDs)');
+    features.push('');
+    features.push('IMPORTANT: All tests MUST use these exact feature IDs in validates_features:');
+    specFeatures.featureManifest.forEach(f =>
+      features.push(`- ${f.id}: ${f.name} [${f.priority}]`)
+    );
+    features.push('');
+  }
+
   if (sections.includes('unit') || sections.includes('integration')) {
     features.push('## Must-Have Features (require test coverage)');
     specFeatures.mustHaveFeatures.forEach(f => features.push(`- ${f}`));
+
+    // Include success criteria for integration tests
+    if (sections.includes('integration') && specFeatures.successCriteria.length > 0) {
+      features.push('');
+      features.push('## Success Criteria (require test coverage)');
+      specFeatures.successCriteria.forEach(c => features.push(`- ${c}`));
+    }
   }
 
   if (sections.includes('e2e')) {
     features.push('## User Flows (require E2E test coverage)');
     specFeatures.userFlows.forEach(f => features.push(`- ${f}`));
+
+    // Include success criteria for e2e tests
+    if (specFeatures.successCriteria.length > 0) {
+      features.push('');
+      features.push('## Success Criteria (require test coverage)');
+      specFeatures.successCriteria.forEach(c => features.push(`- ${c}`));
+    }
   }
 
   if (sections.includes('security')) {
@@ -314,56 +339,25 @@ async function runTestDedupEvaluator(
 
 /**
  * Parse dedup evaluator response into structured format.
+ *
+ * Note: conflicts and uniqueInsights parsing was removed as dead code.
+ * In merge mode, the chairman synthesizes all responses together - conflicts
+ * are resolved implicitly through synthesis. Gap flags are passed via
+ * uniqueInsights array directly (not parsed from response).
  */
 function parseTestDedupResponse(response: string): {
   sections: Record<string, string>;
-  conflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }>;
-  uniqueInsights: Array<{ source: string; insight: string }>;
 } {
   const sections: Record<string, string> = {};
-  const conflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }> = [];
-  const uniqueInsights: Array<{ source: string; insight: string }> = [];
 
-  // Extract sections
-  const sectionPattern = /===SECTION:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
+  // Extract sections - simplified pattern without dead CONFLICTS/UNIQUE_INSIGHTS parsing
+  const sectionPattern = /===SECTION:(\w+)===\s*([\s\S]*?)(?====SECTION:|===GAP_FLAGS===|$)/g;
   let match;
   while ((match = sectionPattern.exec(response)) !== null) {
     sections[match[1]] = match[2].trim();
   }
 
-  // Extract conflicts
-  const conflictPattern = /===CONFLICTS:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
-  while ((match = conflictPattern.exec(response)) !== null) {
-    const conflictText = match[2].trim();
-    const topicPattern = /- Topic: ([^\n]+)\n((?:\s+- \[MODEL: [^\]]+\] [^\n]+\n?)+)/g;
-    let topicMatch;
-    while ((topicMatch = topicPattern.exec(conflictText)) !== null) {
-      const topic = topicMatch[1];
-      const positionsText = topicMatch[2];
-      const positions: Array<{ agent: string; position: string }> = [];
-      const posPattern = /\[MODEL: ([^\]]+)\] ([^\n]+)/g;
-      let posMatch;
-      while ((posMatch = posPattern.exec(positionsText)) !== null) {
-        positions.push({ agent: posMatch[1], position: posMatch[2] });
-      }
-      if (positions.length > 0) {
-        conflicts.push({ topic, positions });
-      }
-    }
-  }
-
-  // Extract unique insights
-  const insightPattern = /===UNIQUE_INSIGHTS:(\w+)===\s*([\s\S]*?)(?====(?:SECTION|CONFLICTS|UNIQUE_INSIGHTS):|$)/g;
-  while ((match = insightPattern.exec(response)) !== null) {
-    const insightText = match[2].trim();
-    const itemPattern = /- \[MODEL: ([^\]]+)\] ([^\n]+)/g;
-    let itemMatch;
-    while ((itemMatch = itemPattern.exec(insightText)) !== null) {
-      uniqueInsights.push({ source: itemMatch[1], insight: itemMatch[2] });
-    }
-  }
-
-  return { sections, conflicts, uniqueInsights };
+  return { sections };
 }
 
 /**
@@ -409,8 +403,6 @@ function createTestSectionedDedupHandler(
 
     // Merge results
     const mergedSections: Record<string, string> = {};
-    const allConflicts: Array<{ topic: string; positions: Array<{ agent: string; position: string }> }> = [];
-    const allUniqueInsights: Array<{ source: string; insight: string }> = [];
     const allGapFlags: string[] = [];
 
     for (const result of evalResults) {
@@ -422,8 +414,6 @@ function createTestSectionedDedupHandler(
       const parsed = parseTestDedupResponse(result.response);
 
       Object.assign(mergedSections, parsed.sections);
-      allConflicts.push(...parsed.conflicts);
-      allUniqueInsights.push(...parsed.uniqueInsights);
       allGapFlags.push(...result.gapFlags);
     }
 
@@ -433,24 +423,23 @@ function createTestSectionedDedupHandler(
     const compressionPct = ((1 - dedupedSize / originalSize) * 100).toFixed(1);
 
     console.log(`    Deduplication complete: ${originalSize} → ${dedupedSize} chars (${compressionPct}% reduction)`);
-    console.log(`    Conflicts found: ${allConflicts.length}`);
-    console.log(`    Unique insights: ${allUniqueInsights.length}`);
     if (allGapFlags.length > 0) {
       console.log(`    ⚠️  Total coverage gaps: ${allGapFlags.length}`);
     } else {
       console.log(`    ✓ No coverage gaps detected`);
     }
 
-    // Store gap flags in uniqueInsights for now (to pass to chairman)
-    // We prefix with [COVERAGE_GAP] so chairman can identify them
-    allGapFlags.forEach(gap => {
-      allUniqueInsights.push({ source: 'gap_analysis', insight: `[COVERAGE_GAP] ${gap}` });
-    });
+    // Convert gap flags to uniqueInsights format for chairman
+    // Prefix with [COVERAGE_GAP] so chairman can identify them
+    const gapInsights: Array<{ source: string; insight: string }> = allGapFlags.map(gap => ({
+      source: 'gap_analysis',
+      insight: `[COVERAGE_GAP] ${gap}`
+    }));
 
     return {
       sections: mergedSections,
-      conflicts: allConflicts,
-      uniqueInsights: allUniqueInsights,
+      conflicts: [], // Dead - conflicts are resolved implicitly in merge mode
+      uniqueInsights: gapInsights,
     };
   };
 }
@@ -958,15 +947,25 @@ export async function runTestCouncil(options: TestCouncilOptions = {}): Promise<
 
 ## Instructions
 
-For each test, note which model(s) contributed it AND its feature linkages:
+For each test, note which model(s) contributed it, its feature linkages, and preserve preconditions/coverage:
 [MODEL: model_name] [FEATURES: FEAT-001, FEAT-002] Test Name - Description
+  [PRECONDITIONS: precondition1; precondition2]
+  [COVERAGE: API: endpoint; Security: aspect]
+  [STEPS: step1; step2; step3]
 
-Group tests by category. IMPORTANT: If a category has fewer tests than the minimum, CREATE additional tests to fill gaps.
+IMPORTANT: Preserve ALL fields from source tests. When merging tests, UNION the FEATURES and combine other metadata.
+
+Group tests by category. If a category has fewer tests than the minimum, CREATE additional tests to fill gaps.
 When creating new tests, assign appropriate feature IDs based on what the test validates.
 
 ## UNIT TESTS (minimum 8)
-[MODEL: claude:heavy] [FEATURES: FEAT-001] Test Name - Brief description
+[MODEL: claude:heavy] [FEATURES: FEAT-001] Password Validation - Verify password meets complexity requirements
+  [PRECONDITIONS: User registration form loaded]
+  [COVERAGE: API: POST /auth/register; Security: Password policy]
+  [STEPS: Enter weak password; Submit form; Check error message]
 [MODEL: gemini:heavy, claude:heavy] [FEATURES: FEAT-001, FEAT-003] Test Name - (merged features from both models)
+  [PRECONDITIONS: combined preconditions]
+  [COVERAGE: combined coverage]
 ...
 
 ## INTEGRATION TESTS (minimum 4)
@@ -1015,10 +1014,32 @@ For feature traceability:
 - Every test MUST have at least one feature ID in validates_features
 - When tests were merged, include ALL feature IDs from ALL source tests (union merge)
 
+For field preservation (extract from Pass 1 tags):
+- Extract preconditions from [PRECONDITIONS: ...] tags (split on ";")
+- Extract coverage from [COVERAGE: ...] tags (split on ";")
+- Extract steps from [STEPS: ...] tags (split on ";")
+
+CRITICAL FIELD REQUIREMENTS - EVERY TEST MUST HAVE:
+1. preconditions - Array of preconditions (use [] if none apply)
+2. coverage - Array of spec sections covered (e.g., ["API: POST /auth", "Security: JWT"])
+3. validates_features - REQUIRED array of FEAT-XXX IDs (extract from [FEATURES:...] tags)
+
 JSON structure:
 {
   "tests": {
-    "unit": [{"id": "UNIT-001", "name": "...", "description": "...", "priority": "high|medium|low", "category": "...", "steps": ["..."], "expected_result": "...", "validates_features": ["FEAT-001"], "source": {"model": "...", "merged_from": ["..."]}}],
+    "unit": [{
+      "id": "UNIT-001",
+      "name": "...",
+      "description": "...",
+      "priority": "critical|high|medium|low",
+      "category": "...",
+      "preconditions": ["precondition 1", "precondition 2"],
+      "steps": ["step 1", "step 2"],
+      "expected_result": "...",
+      "coverage": ["API: POST /auth/login", "Security: Password hashing"],
+      "validates_features": ["FEAT-001", "FEAT-002"],
+      "source": {"model": "...", "merged_from": ["..."]}
+    }],
     "integration": [...],
     "e2e": [...],
     "security": [...],
@@ -1119,6 +1140,13 @@ For EACH test, include validates_features linking to feature IDs from the spec:
 - When merging similar tests: UNION the validates_features arrays from all source tests
 - Example: Test A validates [FEAT-001], Test B validates [FEAT-002] → Merged test validates [FEAT-001, FEAT-002]
 
+## CRITICAL FIELD REQUIREMENTS
+
+EVERY test MUST include these fields (preserve from responder output):
+1. preconditions - Array of preconditions (use [] if none apply)
+2. coverage - Array of spec sections covered (e.g., ["API: POST /auth", "Security: JWT"])
+3. validates_features - REQUIRED array of FEAT-XXX IDs
+
 JSON structure:
 {
   "tests": {
@@ -1129,8 +1157,10 @@ JSON structure:
         "description": "...",
         "priority": "high",
         "category": "...",
+        "preconditions": ["User exists in database", "API is accessible"],
         "steps": ["step1", "step2"],
         "expected_result": "...",
+        "coverage": ["API: POST /auth/login", "Security: Password hashing"],
         "validates_features": ["FEAT-001", "FEAT-002"],
         "source": {
           "model": "claude:default",
@@ -1145,8 +1175,10 @@ JSON structure:
         "description": "...",
         "priority": "high",
         "category": "...",
+        "preconditions": ["Auth service running"],
         "steps": ["generate token", "validate format", "test expiry", "test invalid tokens", ...],
         "expected_result": "...",
+        "coverage": ["API: Token endpoints", "Security: Token validation"],
         "validates_features": ["FEAT-003"],
         "source": { "model": "gemini:default" },
         "atomicity": "split_recommended",
@@ -1158,7 +1190,9 @@ JSON structure:
         "description": "...",
         "priority": "high",
         "category": "performance",
+        "preconditions": ["System under load"],
         "expected_result": "System gracefully degrades under thermal pressure",
+        "coverage": ["Architecture: Thermal Management"],
         "validates_features": ["FEAT-005"],
         "source": { "model": "codex:default" },
         "quantifiable": false,
@@ -1172,7 +1206,9 @@ JSON structure:
         "description": "Test added by chairman during gap analysis - not in any responder output",
         "priority": "critical",
         "category": "security",
+        "preconditions": ["Database accessible"],
         "expected_result": "All user inputs are properly sanitized",
+        "coverage": ["Security: Input validation", "API: All endpoints"],
         "validates_features": ["FEAT-001"],
         "source": { "model": "chairman", "created_by_chairman": true }
       }
@@ -1471,6 +1507,16 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
     );
   }
 
+  // Validate and fix test fields (ensures arrays exist, infers missing feature refs)
+  const featureManifest: FeatureManifestEntry[] = (spec as any).feature_manifest?.features || [];
+  const fieldFixResult = validateAndFixTestFields(testPlan.tests, featureManifest);
+  if (fieldFixResult.fixed > 0 || fieldFixResult.invalidFeatureRefs > 0) {
+    console.log(`  Field validation: inferred ${fieldFixResult.fixed} missing feature refs, removed ${fieldFixResult.invalidFeatureRefs} invalid refs`);
+  }
+
+  // Validate minimum test counts
+  validateMinimumCounts(testPlan.tests);
+
   // Save the test plan
   const outputPath = join(STATE_DIR, 'test-plan-output.json');
   writeFileSync(outputPath, JSON.stringify(testPlan, null, 2));
@@ -1568,6 +1614,118 @@ function countTests(tests: TestPlanOutput['tests']): number {
     (tests.performance?.length || 0) +
     (tests.edge_cases?.length || 0)
   );
+}
+
+/**
+ * Validate that minimum test counts are met.
+ * Logs warnings if any category falls below the required minimum.
+ */
+function validateMinimumCounts(tests: TestPlanOutput['tests']): void {
+  const minimums: Record<string, number> = {
+    unit: 8,
+    integration: 4,
+    e2e: 4,
+    security: 6,
+    performance: 3,
+    edge_cases: 4
+  };
+
+  const warnings: string[] = [];
+  for (const [category, min] of Object.entries(minimums)) {
+    const actual = tests[category as keyof TestPlanOutput['tests']]?.length || 0;
+    if (actual < min) {
+      warnings.push(`${category}: ${actual}/${min}`);
+    }
+  }
+
+  if (warnings.length > 0) {
+    console.warn(`  ⚠️  Below minimum test counts: ${warnings.join(', ')}`);
+    console.warn('      Chairman was asked for minimums but did not deliver. Consider re-running with more capable models.');
+  }
+}
+
+/**
+ * Infer feature IDs from test category by matching against feature manifest.
+ */
+function inferFeaturesFromCategory(
+  category: string,
+  featureManifest: FeatureManifestEntry[]
+): string[] {
+  if (!featureManifest.length) return [];
+
+  // Try to match category to feature name
+  const categoryLower = category.toLowerCase();
+  const matches = featureManifest.filter(f =>
+    f.name.toLowerCase().includes(categoryLower) ||
+    categoryLower.includes(f.name.toLowerCase().split(' ')[0])
+  );
+
+  if (matches.length > 0) {
+    return [matches[0].id];
+  }
+
+  // Fallback: assign to first must_have feature
+  const mustHave = featureManifest.find(f => f.priority === 'must_have');
+  return mustHave ? [mustHave.id] : [];
+}
+
+/**
+ * Validate and fix missing fields in parsed tests.
+ * Ensures validates_features, preconditions, and coverage arrays exist.
+ * Infers feature IDs if missing based on test category.
+ */
+function validateAndFixTestFields(
+  tests: TestPlanOutput['tests'],
+  featureManifest: FeatureManifestEntry[]
+): { fixed: number; invalidFeatureRefs: number } {
+  const allTests: TestCase[] = [
+    ...(tests.unit || []),
+    ...(tests.integration || []),
+    ...(tests.e2e || []),
+    ...(tests.security || []),
+    ...(tests.performance || []),
+    ...(tests.edge_cases || []),
+  ];
+
+  const featureIds = new Set(featureManifest.map(f => f.id));
+  let fixed = 0;
+  let invalidFeatureRefs = 0;
+
+  for (const test of allTests) {
+    // Ensure arrays exist
+    if (!test.preconditions) test.preconditions = [];
+    if (!test.coverage) test.coverage = [];
+
+    // Fix missing validates_features
+    if (!test.validates_features || test.validates_features.length === 0) {
+      test.validates_features = inferFeaturesFromCategory(test.category, featureManifest);
+      if (test.validates_features.length > 0) {
+        fixed++;
+      }
+    }
+
+    // Validate feature IDs are real (filter out invalid ones)
+    if (test.validates_features && featureIds.size > 0) {
+      const validRefs = test.validates_features.filter(id => {
+        if (!featureIds.has(id)) {
+          invalidFeatureRefs++;
+          return false;
+        }
+        return true;
+      });
+      test.validates_features = validRefs;
+
+      // If all refs were invalid, try to infer
+      if (validRefs.length === 0 && test.validates_features.length === 0) {
+        test.validates_features = inferFeaturesFromCategory(test.category, featureManifest);
+        if (test.validates_features.length > 0) {
+          fixed++;
+        }
+      }
+    }
+  }
+
+  return { fixed, invalidFeatureRefs };
 }
 
 function computeAttributionSummary(tests: TestPlanOutput['tests']): NonNullable<NonNullable<TestPlanOutput['merge_metadata']>['attribution_summary']> {
