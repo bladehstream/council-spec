@@ -41,6 +41,7 @@ interface TestCase {
   steps?: string[];
   expected_result: string;
   coverage?: string[];
+  validates_features?: string[];                    // Feature IDs this test validates
   source?: TestSource;                              // Model attribution
   atomicity?: 'atomic' | 'split_recommended';       // Atomicity status
   split_suggestion?: string[];                      // Suggested split test names
@@ -69,7 +70,9 @@ interface TestPlanOutput {
   };
   coverage_summary: {
     features_covered: string[];
+    features_uncovered?: string[];
     gaps_identified: string[];
+    coverage_percentage?: number;
     quantifiability?: {
       total_tests: number;
       quantifiable: number;
@@ -144,6 +147,24 @@ function formatSourceAttribution(source?: TestSource): string {
   return attribution + '\n';
 }
 
+/**
+ * Build a map of feature ID -> test IDs that validate it.
+ */
+function buildFeatureToTestMap(tests: TestCase[]): Record<string, string[]> {
+  const mapping: Record<string, string[]> = {};
+  for (const test of tests) {
+    if (test.validates_features?.length) {
+      for (const featId of test.validates_features) {
+        if (!mapping[featId]) {
+          mapping[featId] = [];
+        }
+        mapping[featId].push(test.id);
+      }
+    }
+  }
+  return mapping;
+}
+
 function generateDetailedTests(tests: TestCase[], sectionName: string): string {
   if (!tests || tests.length === 0) {
     return '';
@@ -156,6 +177,11 @@ function generateDetailedTests(tests: TestCase[], sectionName: string): string {
     lines.push(`#### ${test.id}: ${test.name}\n`);
     lines.push(`**Priority:** ${priorityBadge(test.priority)}  `);
     lines.push(`**Category:** ${test.category}\n`);
+
+    // Show feature traceability
+    if (test.validates_features?.length) {
+      lines.push(`**Validates:** ${test.validates_features.join(', ')}\n`);
+    }
 
     // Add split_from if this test was split from another
     if (test.split_from) {
@@ -320,11 +346,25 @@ function generateMarkdown(plan: TestPlanOutput): string {
   // Coverage Summary
   lines.push('## Coverage Summary\n');
 
-  lines.push('### Features Covered\n');
+  // Coverage percentage
+  if (plan.coverage_summary.coverage_percentage !== undefined) {
+    const totalFeatures = (plan.coverage_summary.features_covered?.length || 0) +
+                         (plan.coverage_summary.features_uncovered?.length || 0);
+    lines.push(`**Coverage:** ${plan.coverage_summary.features_covered?.length || 0}/${totalFeatures} features (${plan.coverage_summary.coverage_percentage}%)\n`);
+  }
+
+  lines.push('\n### Features Covered\n');
   if (plan.coverage_summary.features_covered?.length) {
     lines.push(formatBulletList(plan.coverage_summary.features_covered));
   } else {
     lines.push('_Not specified_\n');
+  }
+
+  // Features without coverage
+  if (plan.coverage_summary.features_uncovered?.length) {
+    lines.push('\n### Features Without Tests\n');
+    lines.push('> The following features have no test coverage:\n\n');
+    lines.push(formatBulletList(plan.coverage_summary.features_uncovered));
   }
 
   lines.push('\n### Gaps Identified\n');
@@ -344,6 +384,16 @@ function generateMarkdown(plan: TestPlanOutput): string {
     if (quant.clarification_report) {
       lines.push(`\nSee [${quant.clarification_report}](${quant.clarification_report}) for details.\n`);
     }
+  }
+
+  // Feature-to-Test Mapping
+  const featureToTests = buildFeatureToTestMap(allTests);
+  if (Object.keys(featureToTests).length > 0) {
+    lines.push('\n### Feature to Test Mapping\n');
+    const mappingRows = Object.entries(featureToTests)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([featId, tests]) => [featId, tests.join(', ')]);
+    lines.push(createTable(['Feature', 'Tests'], mappingRows));
   }
 
   // Merge metadata

@@ -86,6 +86,19 @@ interface ExtendedSpec {
     deployment: string;
     acceptance_criteria: string[];
   };
+  // Feature traceability
+  feature_manifest?: {
+    features: Array<{
+      id: string;
+      name: string;
+      description: string;
+      priority: string;
+      acceptance_criteria?: string[];
+      validated_by_tests?: string[];
+    }>;
+    generated_at: string;
+    tests_linked_at?: string;
+  };
 }
 
 function generateMarkdown(spec: ExtendedSpec): string {
@@ -184,7 +197,34 @@ function generateMarkdown(spec: ExtendedSpec): string {
 
   // Core Functionality
   lines.push('## Core Functionality\n');
-  if (spec.core_functionality?.length) {
+
+  // Prefer feature_manifest if available (has test traceability)
+  if (spec.feature_manifest?.features?.length) {
+    const hasTests = spec.feature_manifest.features.some(f => f.validated_by_tests?.length);
+    const headers = hasTests
+      ? ['ID', 'Feature', 'Priority', 'Validated By']
+      : ['ID', 'Feature', 'Description', 'Priority'];
+
+    const rows = spec.feature_manifest.features.map(f => {
+      if (hasTests) {
+        const tests = f.validated_by_tests?.length
+          ? f.validated_by_tests.join(', ')
+          : '_No tests_';
+        return [f.id, f.name, priorityBadge(f.priority), tests];
+      } else {
+        return [f.id, f.name, f.description || '_No description_', priorityBadge(f.priority)];
+      }
+    });
+    lines.push(createTable(headers, rows));
+
+    // Show test coverage summary
+    if (spec.feature_manifest.tests_linked_at) {
+      const covered = spec.feature_manifest.features.filter(f => f.validated_by_tests?.length).length;
+      const total = spec.feature_manifest.features.length;
+      const pct = total > 0 ? Math.round((covered / total) * 100) : 0;
+      lines.push(`\n**Test Coverage:** ${covered}/${total} features (${pct}%)\n`);
+    }
+  } else if (spec.core_functionality?.length) {
     const rows = spec.core_functionality.map(f => [
       f.feature,
       f.description || '_No description_',
