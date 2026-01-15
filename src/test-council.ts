@@ -51,12 +51,21 @@ const TEST_DEDUP_SECTION_ASSIGNMENTS = {
 // Spec Feature Extraction for Gap Analysis
 // ============================================================================
 
+interface FeatureManifestEntry {
+  id: string;
+  name: string;
+  description: string;
+  priority: 'must_have' | 'should_have' | 'nice_to_have';
+  acceptance_criteria?: string[];
+}
+
 interface SpecFeatures {
   mustHaveFeatures: string[];
   successCriteria: string[];
   securityRequirements: string[];
   performanceRequirements: string[];
   userFlows: string[];
+  featureManifest: FeatureManifestEntry[];
 }
 
 /**
@@ -124,12 +133,21 @@ function loadSpecFeatures(): SpecFeatures | null {
       typeof f === 'string' ? f : `${f.name || f.flow}: ${f.description || f.steps?.join(' → ') || ''}`
     );
 
+    // Extract feature manifest (for traceability)
+    const featureManifest: FeatureManifestEntry[] = spec.feature_manifest?.features || [];
+    if (featureManifest.length > 0) {
+      console.log(`  Loaded feature manifest: ${featureManifest.length} features with IDs`);
+    } else {
+      console.warn('  Warning: No feature manifest found - test traceability will be limited');
+    }
+
     return {
       mustHaveFeatures,
       successCriteria,
       securityRequirements,
       performanceRequirements,
       userFlows,
+      featureManifest,
     };
   } catch (err) {
     console.warn('  Warning: Failed to parse spec-final.json:', err);
@@ -654,6 +672,30 @@ function buildTestPlanPrompt(spec: ExtendedSpec): string {
     ? spec.core_functionality.map(f => `- ${f.feature}: ${f.description || 'No description'} (${f.priority})`).join('\n')
     : '';
 
+  // Extract feature manifest for traceability
+  const featureManifest = (spec as any).feature_manifest?.features || [];
+  const featureManifestText = featureManifest.length > 0
+    ? featureManifest.map((f: FeatureManifestEntry) => `- ${f.id}: ${f.name} [${f.priority}] - ${f.description}`).join('\n')
+    : '';
+
+  // Build feature traceability section
+  const traceabilitySection = featureManifestText
+    ? `
+## CRITICAL: Feature Traceability
+
+Every test MUST include a \`validates_features\` array with at least one feature ID.
+Link tests to features NOW — this is when you know exactly why you're creating each test.
+
+**Feature Manifest:**
+${featureManifestText}
+
+When creating tests, reference the feature IDs above. For example:
+- A test for password validation should include \`"validates_features": ["FEAT-001"]\`
+- A test covering multiple features should include all relevant IDs
+
+`
+    : '';
+
   return `You are a senior QA engineer tasked with creating a comprehensive test plan.
 
 ## Project Specification
@@ -679,7 +721,7 @@ ${security}
 
 **Acceptance Criteria:**
 ${criteriaText}
-
+${traceabilitySection}
 ## Your Task
 
 Generate a comprehensive test plan covering ALL aspects of this specification.
@@ -692,7 +734,8 @@ For EACH test, provide:
 4. Priority (critical/high/medium/low)
 5. Category (the feature or component being tested)
 6. Expected result
-7. Which parts of the spec it covers
+7. **validates_features** - Array of feature IDs this test validates (e.g., ["FEAT-001", "FEAT-002"])
+8. Which parts of the spec it covers
 
 ## Output Format
 
@@ -707,6 +750,7 @@ Output your test plan as JSON with this structure:
         "description": "What this tests",
         "priority": "high",
         "category": "authentication",
+        "validates_features": ["FEAT-001"],
         "preconditions": ["User exists in database"],
         "steps": ["Step 1", "Step 2"],
         "expected_result": "Expected outcome",
@@ -720,13 +764,14 @@ Output your test plan as JSON with this structure:
     "edge_cases": [...]
   },
   "coverage_summary": {
-    "features_covered": ["Feature A", "Feature B"],
+    "features_covered": ["FEAT-001", "FEAT-002"],
     "gaps_identified": ["Any areas not fully tested"]
   }
 }
 \`\`\`
 
 Be thorough. Include edge cases. Think about what could go wrong.
+IMPORTANT: Every test MUST include validates_features with at least one feature ID from the Feature Manifest.
 `;
 }
 
