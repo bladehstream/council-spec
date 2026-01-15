@@ -1353,6 +1353,12 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
       edge_cases: [],
     };
 
+    // Compute accurate feature coverage from test data
+    const featureCoverage = computeFeatureCoverage(
+      tests,
+      (spec as any).feature_manifest?.features
+    );
+
     testPlan = {
       metadata: {
         project_id: projectName,
@@ -1363,10 +1369,12 @@ Chairman: ${pipelineConfig.stage3.chairman.name}
       },
       tests,
       coverage_summary: {
-        ...(parsed.coverage_summary || {
-          features_covered: [],
-          gaps_identified: [],
-        }),
+        // Use computed coverage (more accurate than chairman output)
+        features_covered: featureCoverage.features_covered,
+        features_uncovered: featureCoverage.features_uncovered,
+        coverage_percentage: featureCoverage.coverage_percentage,
+        // Preserve gaps_identified from chairman analysis
+        gaps_identified: parsed.coverage_summary?.gaps_identified || [],
         quantifiability: computeQuantifiabilityStats(tests),
       },
       merge_metadata: {
@@ -1451,13 +1459,24 @@ Traceability: ${linkResult.featuresUpdated} features linked to ${linkResult.test
     console.log('  Run "npm run test-finalize" to generate clarification report');
   }
 
-  // Traceability summary
+  // Feature coverage summary
+  const coveragePct = testPlan.coverage_summary.coverage_percentage;
+  const totalFeatures = testPlan.coverage_summary.features_covered.length +
+                       (testPlan.coverage_summary.features_uncovered?.length || 0);
+  if (totalFeatures > 0) {
+    console.log('');
+    console.log('  Feature Coverage:');
+    console.log(`    ${testPlan.coverage_summary.features_covered.length}/${totalFeatures} features covered (${coveragePct}%)`);
+    if (testPlan.coverage_summary.features_uncovered && testPlan.coverage_summary.features_uncovered.length > 0) {
+      console.log(`    Uncovered: ${testPlan.coverage_summary.features_uncovered.join(', ')}`);
+    }
+  }
+
+  // Traceability summary (spec write-back)
   if (linkResult.written) {
     console.log('');
-    console.log('  Feature Traceability:');
-    console.log(`    Features with tests: ${linkResult.featuresUpdated}`);
-    console.log(`    Test-feature links: ${linkResult.testsLinked}`);
-    console.log('    spec-final.json updated with validated_by_tests');
+    console.log('  Spec Updated:');
+    console.log(`    validated_by_tests added to ${linkResult.featuresUpdated} features`);
   }
 
   console.log('');
@@ -1533,6 +1552,64 @@ function computeQuantifiabilityStats(tests: TestPlanOutput['tests']): NonNullabl
     total_tests: totalTests,
     quantifiable,
     needs_clarification: needsClarification,
+  };
+}
+
+/**
+ * Computes feature coverage from tests validates_features field.
+ * Returns accurate stats based on actual test-feature linkages.
+ */
+function computeFeatureCoverage(
+  tests: TestPlanOutput['tests'],
+  featureManifest: FeatureManifestEntry[] | undefined
+): { features_covered: string[]; features_uncovered: string[]; coverage_percentage: number } {
+  // If no feature manifest, return empty stats
+  if (!featureManifest || featureManifest.length === 0) {
+    return {
+      features_covered: [],
+      features_uncovered: [],
+      coverage_percentage: 0,
+    };
+  }
+
+  // Get all feature IDs
+  const allFeatureIds = new Set(featureManifest.map(f => f.id));
+
+  // Collect all tests
+  const allTests: TestCase[] = [
+    ...(tests.unit || []),
+    ...(tests.integration || []),
+    ...(tests.e2e || []),
+    ...(tests.security || []),
+    ...(tests.performance || []),
+    ...(tests.edge_cases || []),
+  ];
+
+  // Find which features have at least one test
+  const coveredFeatures = new Set<string>();
+  for (const test of allTests) {
+    if (test.validates_features && Array.isArray(test.validates_features)) {
+      for (const featId of test.validates_features) {
+        if (allFeatureIds.has(featId)) {
+          coveredFeatures.add(featId);
+        }
+      }
+    }
+  }
+
+  // Compute uncovered features
+  const uncoveredFeatures = [...allFeatureIds].filter(id => !coveredFeatures.has(id));
+
+  // Calculate percentage
+  const totalFeatures = allFeatureIds.size;
+  const coveragePercentage = totalFeatures > 0
+    ? Math.round((coveredFeatures.size / totalFeatures) * 100)
+    : 0;
+
+  return {
+    features_covered: [...coveredFeatures].sort(),
+    features_uncovered: uncoveredFeatures.sort(),
+    coverage_percentage: coveragePercentage,
   };
 }
 
